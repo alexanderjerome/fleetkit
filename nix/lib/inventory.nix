@@ -3,7 +3,7 @@
 # without circular dependencies.
 #
 # Phase N: input is the evaluated fleet module's hostsJson shape passed
-# directly, not a file read from .cache/sk/hosts.json.  Callers that don't
+# directly, not a file read from .cache/fleet/hosts.json.  Callers that don't
 # want to eval fleet themselves can fall back to reading the generated
 # `packages.hostsJson` output from disk.
 {

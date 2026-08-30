@@ -1,0 +1,23 @@
+---
+- import_tasks: cloud-guest-utils.yml
+  tags: [proxmox-base, cloud-guest-utils]
+
+- import_tasks: grow-storage.yml
+  tags: [proxmox-base, grow-storage]
+
+# Host-level CT liveness watchdog (opt-in via ct_watchdog_enable in
+# host vars).
+- import_tasks: ct-watchdog.yml
+  tags: [proxmox-base, ct-watchdog]
+
+- import_tasks: no-sub-repos.yml
+  tags: [proxmox-base, no-sub-repos]
+
+- import_tasks: subscription-nag.yml
+  tags: [proxmox-base, subscription-nag]
+
+- import_tasks: apt-update.yml
+  tags: [proxmox-base, apt-update]
+
+- import_tasks: peer-hosts.yml
+  tags: [proxmox-base, peer-hosts]

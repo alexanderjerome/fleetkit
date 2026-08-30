@@ -3,12 +3,12 @@
 # ansible_playbook emitter — chains post-install Ansible to the compute
 # resource tofu just created. Once a host's VM/LXC exists per fleet.compute,
 # the matching `ansible_playbook` resource runs the corresponding playbook
-# against it. End result: `sk deploy tf apply <stack>` brings a host from
+# against it. End result: `fleet deploy tf apply <stack>` brings a host from
 # "doesn't exist" to "fully converged" in one command.
 #
 # Two conventions today:
 #   - kind=container with non-NixOS image → playbooks/developer.yml
-#     (Debian dev workstations — Docker, Nix, Infisical, dev tools)
+#     (Debian dev workstations — Docker, Nix, dev tools)
 #   - kind=vm with tag "pve-host"         → playbooks/pve.yml
 #     (PVE hypervisor — base + proxmox/base + proxmox/pve roles)
 #
@@ -20,16 +20,25 @@
 #
 # SSH + auth: ansible-playbook runs locally on whoever runs tofu apply.
 # The operator must have:
-#   • the sysadmin SSH private key at ~/.ssh/sysadmin-key
+#   • the sysadmin SSH private key (fleet.network.sysadmin_key_file)
 #   • SOPS_AGE_KEY_FILE pointing at the age key (for community.sops
-#     lookups in roles like proxmox/base/sssd, infisical/sops-to-...)
-# `sk deploy tf apply` sets both via the devShell hook.
+#     lookups in roles like proxmox/pve acme, proxmox/pbs garage-key)
+# `fleet deploy tf apply` sets both via the launcher env bootstrap.
 #
-# Path: ansible-playbook resolves relative paths from the tofu working
-# directory, which is .tf/<stack>/. The repo root is two levels up.
+# Path: the framework playbooks ship with fleetkit itself (../../../
+# ansible). Interpolating the whole tree copies it to the Nix store, so
+# the playbook path baked into config.tf.json is absolute and the
+# sibling roles/ ride along (ansible/playbooks/roles is a symlink to
+# ../roles, making the copied tree self-resolving without any
+# ANSIBLE_ROLES_PATH). A consumer can substitute its own playbook per
+# host via fleet.compute.<name>.ansible_playbook (a string, resolved by
+# ansible-playbook relative to the tofu working dir .tf/<stack>/ when
+# not absolute).
 
 let
   inherit (lib) filterAttrs mapAttrs' hasInfix elem;
+
+  ansibleTree = ../../../ansible;
 
   computeInStack = filterAttrs
     (_: c: (c.enabled or true)
@@ -39,17 +48,24 @@ let
 
   # Pick the playbook based on the host class. Returns null when no
   # convention matches (NixOS LXCs, etc. — Colmena manages those).
-  playbookFor = name: meta:
+  # A per-host fleet.compute.<name>.ansible_playbook overrides the
+  # convention playbook (but never opts extra hosts in).
+  conventionPlaybookFor = name: meta:
     if meta.kind == "container" && (meta.image or null) != null then
-      "../../ansible/playbooks/developer.yml"
+      "${ansibleTree}/playbooks/developer.yml"
     else if meta.kind == "vm" && elem "pve-host" (meta.tags or []) then
-      "../../ansible/playbooks/pve.yml"
+      "${ansibleTree}/playbooks/pve.yml"
     else null;
+
+  playbookFor = name: meta:
+    if (conventionPlaybookFor name meta) == null then null
+    else if (meta.ansible_playbook or null) != null then meta.ansible_playbook
+    else conventionPlaybookFor name meta;
 
   # Group every Ansible-managed host belongs to so the matching play
   # (`- hosts: developer` / `- hosts: pve`) actually matches. The
   # ansible_host resource the provider emits would otherwise leave the
-  # host in no group, and `--limit nithin` wouldn't intersect with
+  # host in no group, and `--limit <host>` wouldn't intersect with
   # `- hosts: developer`.
   groupFor = name: meta:
     if meta.kind == "container" && (meta.image or null) != null then "developer"

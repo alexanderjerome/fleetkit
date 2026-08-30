@@ -51,6 +51,7 @@ let
 
 in pkgs.stdenv.mkDerivation {
   name = "fleetkit-docs";
+  passthru.optionsJSON = optionsDoc.optionsJSON;
   src = ./.;
   nativeBuildInputs = [ pkgs.mdbook ];
   buildPhase = ''

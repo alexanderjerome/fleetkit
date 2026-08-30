@@ -160,6 +160,13 @@
           tf-stack-ids = pkgs.writeText "tf-stack-ids.json"
             (builtins.toJSON leafStackIds);
 
+          # fleet.settings as JSON — read by eval-free CLI features that
+          # need Nix-side settings (e.g. `fleet mcp config` deriving the
+          # fleet's observability MCP endpoints). Settings hold no secret
+          # VALUES (secrets are sops paths), so this is safe to build.
+          settings-json = pkgs.writeText "fleet-settings.json"
+            (builtins.toJSON fleetEval.settings);
+
         }
         # One `tf-<env>-<stack>` package per leaf stack:
         # `nix build .#tf-platform-core` → config.tf.json for tofu.
@@ -193,6 +200,11 @@
         docs = import ./docs {
           inherit pkgs nixpkgs sops-nix disko;
         };
+
+        # The same option data as structured JSON — the machine/agent-
+        # preferred API surface (name, type, default, description,
+        # declaring file per option).
+        options-json = docs.passthru.optionsJSON;
 
         # xoa-cli — standalone Xen Orchestra operator CLI. Reads over XO
         # REST, mutations over the JSON-RPC websocket. Drives the

@@ -1,0 +1,29 @@
+---
+# Drop in a one-shot systemd unit that runs at boot, walks every VG listed
+# in grow_storage_vgs, grows the PV on the underlying device, then expands
+# every LV inside the VG to consume any new free space. Idempotent — exits
+# 0 when nothing changed.
+
+- name: render grow-storage script
+  ansible.builtin.template:
+    src: grow-storage.sh.j2
+    dest: /usr/local/sbin/grow-storage.sh
+    owner: root
+    group: root
+    mode: "0755"
+  notify: daemon-reload
+
+- name: render grow-storage systemd unit
+  ansible.builtin.template:
+    src: grow-storage.service.j2
+    dest: /etc/systemd/system/grow-storage.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: daemon-reload
+
+- name: enable grow-storage at boot
+  ansible.builtin.systemd:
+    name: grow-storage.service
+    enabled: true
+    daemon_reload: true

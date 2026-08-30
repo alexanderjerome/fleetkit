@@ -1,0 +1,13 @@
+[Unit]
+# Rendered by ansible: roles/proxmox/base/tasks/grow-storage.yml.
+Description=Grow LVM PVs/LVs to match underlying VDI size
+After=local-fs.target
+ConditionPathExists=/usr/local/sbin/grow-storage.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/grow-storage.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

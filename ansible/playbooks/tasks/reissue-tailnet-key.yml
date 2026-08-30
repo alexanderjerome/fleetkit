@@ -1,0 +1,15 @@
+---
+# One-shot: reissue a tailnet preauth key and rejoin the tailnet on a
+# target. Run if a host fell off the tailnet or a key expired.
+#
+#   fleet ansible run tasks/reissue-tailnet-key --limit <host>
+
+- hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - import_role:
+        name: base
+        tasks_from: tailnet-enroll
+      vars:
+        tailnet_force_rekey: true

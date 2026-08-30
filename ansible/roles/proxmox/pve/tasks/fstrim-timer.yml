@@ -1,0 +1,47 @@
+---
+# Weekly `pct fstrim` sweep over all running CTs.
+#
+# Thin-provisioned LXC volumes accumulate deleted-but-untrimmed blocks:
+# the in-CT ext4 shows free space while the backing lvmthin pool keeps
+# filling. Unprivileged CTs cannot fstrim from inside, so the sweep must
+# run host-side. Runs ON each PVE host.
+#
+# Opt out per host with `pve_fstrim_timer: false` in host vars.
+
+- name: install pct-fstrim sweep service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pct-fstrim.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=fstrim all running LXC containers (thin-pool reclaim)
+
+      [Service]
+      Type=oneshot
+      # Serialize trims; a failing CT must not abort the sweep.
+      ExecStart=/bin/sh -c 'for id in $(pct list | awk "NR>1 && \$2==\"running\" {print \$1}"); do pct fstrim $id || true; done'
+  register: pve_fstrim_service_unit
+
+- name: install pct-fstrim weekly timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pct-fstrim.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=weekly fstrim of all running LXC containers
+
+      [Timer]
+      OnCalendar=Sun 03:30
+      RandomizedDelaySec=1h
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  register: pve_fstrim_timer_unit
+
+- name: enable pct-fstrim timer
+  ansible.builtin.systemd:
+    name: pct-fstrim.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ pve_fstrim_service_unit.changed or pve_fstrim_timer_unit.changed }}"

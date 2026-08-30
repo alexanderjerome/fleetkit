@@ -1,0 +1,45 @@
+---
+- import_tasks: secondary-nics.yml
+  tags: [pve, secondary-nics]
+
+# Adopt extra data VDIs into their own VG + lvmthin storage
+# (pve_data_disks) and/or fold raw disks into the pve VG itself
+# (pve_vg_extend_disks) before anything tries to carve LXC volumes.
+- import_tasks: data-disk.yml
+  tags: [pve, data-disk]
+  when: (pve_data_disks is defined) or (pve_vg_extend_disks is defined)
+
+# Cluster-wide NFS storage (ISOs + LXC templates on the builder host).
+- import_tasks: nfs-storage.yml
+  tags: [pve, nfs-storage]
+
+# /dev/net/tun passthrough for dev CTs (tailscale needs a real TUN
+# device inside the container). Reference: community-scripts
+# add-tailscale-lxc.sh — identical conf lines. CT reboot required
+# afterwards; the task reports, never restarts.
+- import_tasks: dev-lxc-tun.yml
+  tags: [pve, dev-lxc-tun]
+  when: pve_tun_passthrough_cts is defined
+
+- import_tasks: cluster-join.yml
+  tags: [pve, cluster-join]
+
+# Weekly host-side `pct fstrim` sweep — thin pools fill with
+# deleted-but-untrimmed blocks that in-guest disk alerts can't see.
+- import_tasks: fstrim-timer.yml
+  tags: [pve, fstrim-timer]
+  when: pve_fstrim_timer | default(true)
+
+# PBS vzdump backup jobs. Declared per node via the `pve_backup_jobs`
+# host var; reconciled idempotently against /cluster/backup. Runs after
+# cluster-join (backup jobs are cluster-level state).
+- import_tasks: backup-jobs.yml
+  tags: [pve, backup-jobs]
+  when: pve_backup_jobs is defined
+
+# PVE-native ACME (LE) cert for the node, DNS-01 via Cloudflare. Only
+# runs where a host declares `pve_acme_domains` (host vars). Idempotent;
+# ordered only when the live cert doesn't already cover the domain.
+- import_tasks: acme.yml
+  tags: [pve, acme]
+  when: pve_acme_domains is defined

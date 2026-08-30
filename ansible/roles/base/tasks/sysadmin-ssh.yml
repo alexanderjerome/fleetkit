@@ -1,0 +1,34 @@
+---
+# Fleet operator SSH keys — the back door. Every host accepts them on root
+# so that an IdP/SSSD/LDAP outage never locks the operator out of the
+# fleet. Per-developer keys are layered on top in roles/developer.
+
+- name: require fleet_admin_ssh_keys
+  ansible.builtin.assert:
+    that:
+      - fleet_admin_ssh_keys is defined
+      - fleet_admin_ssh_keys | length > 0
+    fail_msg: >-
+      fleet_admin_ssh_keys is required — a non-empty list of SSH public
+      key strings authorized on root of every fleet host. Set it in your
+      inventory (group_vars/all) or pass it via --extra-vars. It should
+      mirror fleet.settings.adminSshKeys on the Nix side.
+
+- name: ensure /root/.ssh exists
+  ansible.builtin.file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: install fleet operator key(s)
+  ansible.posix.authorized_key:
+    user: root
+    state: present
+    key: "{{ item }}"
+    exclusive: false
+    comment: "fleet operator key (managed by ansible)"
+  loop: "{{ fleet_admin_ssh_keys }}"
+  loop_control:
+    label: "{{ item | truncate(40, true) }}"

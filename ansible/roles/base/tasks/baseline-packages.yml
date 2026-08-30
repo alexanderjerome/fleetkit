@@ -1,0 +1,10 @@
+---
+- name: refresh apt cache (cached up to 1h)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: install baseline packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present

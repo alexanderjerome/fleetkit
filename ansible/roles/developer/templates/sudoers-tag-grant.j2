@@ -1,0 +1,10 @@
+# Rendered by ansible: roles/developer/tasks/sudo-scope.yml.
+# Scaffold — the actual scoping logic depends on resolving fleet tags at
+# apply time. Until then, this fragment just expresses the grant in
+# human-readable form.
+#
+# Group: {{ item.ldap_group }}
+# Permitted tags: {{ item.resource_tags | join(', ') }}
+# This host's tags: derived from fleet.compute.<name>.tags at apply time
+
+%{{ item.ldap_group }} ALL=(ALL) NOPASSWD: ALL

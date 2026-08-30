@@ -6,7 +6,7 @@ root CA and intermediate certificates that step-ca needs to start.
 Requires:
   - netgate container running and SSH-reachable
   - SOPS secrets.yaml with step-ca/intermediate-password
-  - .cache/sk/hosts.json with netgate entry
+  - .cache/fleet/hosts.json with netgate entry
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from ._util import find_project_root
+from ._util import find_project_root, fleet_cache_dir
 
 console = Console()
 
@@ -38,9 +38,9 @@ def _sops_decrypt(secrets_file: str, key_path: str) -> str:
 def _get_netgate_ip() -> str:
     """Get netgate's SSH-reachable IP from hosts.json."""
     root = find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
     if not hosts_file.exists():
-        console.print("[red]ERROR:[/red] .cache/sk/hosts.json not found — run `fleet inventory generate` first")
+        console.print("[red]ERROR:[/red] .cache/fleet/hosts.json not found — run `fleet inventory generate` first")
         sys.exit(1)
 
     hosts = json.loads(hosts_file.read_text())

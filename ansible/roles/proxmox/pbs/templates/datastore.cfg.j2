@@ -1,0 +1,6 @@
+# Rendered by ansible: roles/proxmox/pbs/tasks/datastore-config.yml.
+# Edit your inventory group vars, not here.
+
+datastore: {{ pbs_datastore_id }}
+        path {{ pbs_datastore_path }}
+        backend type=s3,client={{ pbs_s3_endpoint_id }},bucket={{ pbs_s3_bucket }}

@@ -1,0 +1,13 @@
+---
+# Default play orders: build template, build ISOs, refresh exports. Invoke
+# individually via --tags to avoid the full rebuild when only one output
+# changed.
+
+- import_tasks: build-template.yml
+  tags: [nix-builder, build-template]
+
+- import_tasks: build-iso.yml
+  tags: [nix-builder, build-iso]
+
+- import_tasks: restart-nfs.yml
+  tags: [nix-builder, restart-nfs]

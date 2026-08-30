@@ -125,6 +125,33 @@ def find_project_root() -> Path:
     return Path.cwd()
 
 
+def fleet_cache_dir(root: Path | None = None) -> Path:
+    """Return the launcher cache directory ``<root>/.cache/fleet``.
+
+    Single choke point for the on-disk cache location (hosts.json,
+    hosts-backups/, the generated ansible inventory). *root* defaults to
+    :func:`find_project_root`.
+
+    One-time silent migration: if ``.cache/fleet`` does not exist yet but
+    the pre-rename ``sk`` cache directory does, the old directory is
+    renamed in place so cached state carries over. The directory is created when
+    missing, so callers can write into it directly.
+    """
+    if root is None:
+        root = find_project_root()
+    cache = root / ".cache"
+    new = cache / "fleet"
+    if not new.exists():
+        old = cache / "sk"
+        if old.is_dir():
+            try:
+                os.rename(old, new)
+            except OSError:
+                pass  # cross-device / permission oddity — fall through, start fresh
+    new.mkdir(parents=True, exist_ok=True)
+    return new
+
+
 def _tee_stream(src: io.RawIOBase, dest: io.IOBase, buf: list[bytes]) -> None:
     """Read from src, write to dest (live), and collect into buf."""
     while True:

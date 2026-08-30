@@ -1,0 +1,11 @@
+[Unit]
+# Rendered by ansible: roles/proxmox/base/tasks/ct-watchdog.yml.
+Description=Host-level CT liveness watchdog sweep (pct exec probe)
+ConditionPathExists=/usr/local/sbin/ct-watchdog.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ct-watchdog.sh
+# A sweep that outlives the timer interval by a lot means multiple wedged
+# CTs in stop/start; cap it so runs can never pile up unbounded.
+TimeoutStartSec=900

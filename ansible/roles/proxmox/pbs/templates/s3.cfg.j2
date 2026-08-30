@@ -1,0 +1,14 @@
+# Rendered by ansible: roles/proxmox/pbs/tasks/s3-config.yml.
+# Edit your inventory group vars, not here.
+#
+# NO `fingerprint` line — the internal CA root is in the system trust store
+# (managed by roles/base/tasks/ca-trust.yml). Re-pinning will break every
+# CA rotation.
+
+s3-endpoint: {{ pbs_s3_endpoint_id }}
+        endpoint {{ pbs_s3_endpoint }}
+        region {{ pbs_s3_region }}
+        bucket {{ pbs_s3_bucket }}
+        access-key {{ pbs_garage_access_key }}
+        secret-key {{ pbs_garage_secret_key }}
+        path-style true

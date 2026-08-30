@@ -1,0 +1,5 @@
+---
+- name: install cloud-guest-utils (provides growpart)
+  ansible.builtin.apt:
+    name: cloud-guest-utils
+    state: present

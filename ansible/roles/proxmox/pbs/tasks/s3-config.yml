@@ -1,0 +1,16 @@
+---
+# /etc/proxmox-backup/s3.cfg — Garage endpoint declaration.
+#
+# DO NOT pin a fingerprint here. An internal-CA root rotation can silently
+# invalidate a pinned hash — PBS then refuses every backup with "failed to set
+# owner on s3 backend" until the pin is removed. base/ca-trust.yml ships
+# the rolling internal-CA root into the system trust store — plain TLS
+# validation is enough.
+
+- name: render /etc/proxmox-backup/s3.cfg
+  ansible.builtin.template:
+    src: s3.cfg.j2
+    dest: "{{ pbs_s3_config_path }}"
+    owner: root
+    group: backup
+    mode: "0640"

@@ -1,0 +1,17 @@
+---
+# One-shot: rebuild the PVE LXC template on the fleet's NixOS builder host
+# and re-export it over NFS. Run after any change to the template
+# configuration in nix/.
+#
+#   fleet ansible run tasks/rebuild-pve-template
+
+- hosts: nix-builder
+  gather_facts: false
+  become: true
+  tasks:
+    - import_role:
+        name: nixos/nix-builder
+        tasks_from: build-template
+    - import_role:
+        name: nixos/nix-builder
+        tasks_from: restart-nfs

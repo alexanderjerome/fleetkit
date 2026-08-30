@@ -11,6 +11,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from ._util import fleet_cache_dir
 from ._util import find_project_root as _find_project_root
 
 console = Console()
@@ -160,18 +161,18 @@ def _query_pve_api(hosts_by_vmid: dict[int, str]) -> dict[int, dict]:
 def inventory():
     """Host inventory generation and management.
 
-    Builds and displays ``.cache/sk/hosts.json`` — the single source of
+    Builds and displays ``.cache/fleet/hosts.json`` — the single source of
     truth mapping container names to VMIDs, IPs, and metadata.
     """
     pass
 
 
 def generate_hosts_json(*, offline: bool = False, quiet: bool = False) -> Path:
-    """Materialise .cache/sk/hosts.json from the Nix fleet module.
+    """Materialise .cache/fleet/hosts.json from the Nix fleet module.
 
     The Nix fleet module is the single source
     of truth.  We shell out to ``nix build .#hostsJson`` and copy the
-    resulting store path to ``.cache/sk/hosts.json``.  No PVE API scrape —
+    resulting store path to ``.cache/fleet/hosts.json``.  No PVE API scrape —
     that path caused config drift (netgate's net0 static was being read
     back as internal_ip, which NixOS then re-applied).
 
@@ -216,7 +217,7 @@ def generate_hosts_json(*, offline: bool = False, quiet: bool = False) -> Path:
         console.print(f"[yellow]Warning:[/yellow] XOA discovery skipped: {exc}")
 
     output = json.dumps(hosts, indent=2, sort_keys=True) + "\n"
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
     hosts_file.write_text(output)
     if not quiet:
         # pve_type is namespaced ("pve.lxc" / "pve.vm") since the fleet
@@ -232,7 +233,7 @@ def generate_hosts_json(*, offline: bool = False, quiet: bool = False) -> Path:
             f"[dim]({len(hosts)} hosts: {lxc} LXC, {vm} VM, {xoa} XCP-ng)[/dim]"
         )
 
-    backup_dir = root / ".cache" / "sk" / "hosts-backups"
+    backup_dir = fleet_cache_dir(root) / "hosts-backups"
     backup_dir.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     backup_file = backup_dir / f"hosts.{timestamp}.json"
@@ -243,10 +244,10 @@ def generate_hosts_json(*, offline: bool = False, quiet: bool = False) -> Path:
 
 @inventory.command("generate")
 def generate():
-    """Materialise .cache/sk/hosts.json from the Nix fleet module.
+    """Materialise .cache/fleet/hosts.json from the Nix fleet module.
 
     Runs ``nix build .#hostsJson`` and copies the output to
-    ``.cache/sk/hosts.json`` (with a timestamped backup).  Use
+    ``.cache/fleet/hosts.json`` (with a timestamped backup).  Use
     ``fleet inventory diff`` to compare declared state against
     live Proxmox state.
     """
@@ -257,14 +258,14 @@ def generate():
 def show():
     """Display current hosts inventory as a rich table.
 
-    Reads ``.cache/sk/hosts.json`` and prints each host's VMID, routable IP
+    Reads ``.cache/fleet/hosts.json`` and prints each host's VMID, routable IP
     (vmbr0), internal IP (vmbr1), and tags.
     """
     root = _find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
 
     if not hosts_file.exists():
-        console.print("[red]ERROR:[/red] .cache/sk/hosts.json not found — run 'fleet inventory generate' first")
+        console.print("[red]ERROR:[/red] .cache/fleet/hosts.json not found — run 'fleet inventory generate' first")
         sys.exit(1)
 
     with open(hosts_file) as f:
@@ -301,8 +302,8 @@ def diff():
     agent interfaces).  Reports per-host: VMID mismatches, IP drift,
     MAC drift, and hosts that exist on one side but not the other.
 
-    Read-only — never writes .cache/sk/hosts.json.  Use
-    ``sk inventory generate`` to refresh the on-disk inventory from
+    Read-only — never writes .cache/fleet/hosts.json.  Use
+    ``fleet inventory generate`` to refresh the on-disk inventory from
     fleet.
     """
     root = _find_project_root()

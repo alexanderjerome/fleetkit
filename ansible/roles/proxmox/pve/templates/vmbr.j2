@@ -1,0 +1,10 @@
+# Rendered by ansible: roles/proxmox/pve/tasks/secondary-nics.yml.
+# Bridge: {{ item.bridge }}
+{% if item.comment is defined %}# {{ item.comment }}{% endif %}
+
+auto {{ item.bridge }}
+iface {{ item.bridge }} inet static
+    address {{ item.address }}
+    bridge-ports {{ item.ports | default('none') }}
+    bridge-stp off
+    bridge-fd 0

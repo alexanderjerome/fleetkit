@@ -1,0 +1,84 @@
+---
+# Idempotent: ensure the terraform PBS user + API token exist. A caller
+# (e.g. the fleet CLI) can read the generated token out of the
+# `tf_token_value` host fact after this play runs and store it in the
+# fleet's secrets backend for the tofu PBS provider.
+
+- name: list existing PBS users
+  ansible.builtin.command: proxmox-backup-manager user list --output-format=json
+  register: pbs_user_list
+  changed_when: false
+
+- name: parse PBS user list
+  ansible.builtin.set_fact:
+    pbs_user_exists: >-
+      {{
+        (pbs_user_list.stdout | from_json
+          | selectattr('userid', 'equalto', pbs_tf_user)
+          | list | length) > 0
+      }}
+
+- name: create terraform PBS user
+  ansible.builtin.command: >-
+    proxmox-backup-manager user create {{ pbs_tf_user }}
+    --comment 'terraform integration user — managed by ansible'
+  when: not pbs_user_exists
+  changed_when: true
+
+- name: grant Admin on datastore
+  ansible.builtin.command: >-
+    proxmox-backup-manager acl update /datastore/{{ pbs_datastore_id }}
+    DatastoreAdmin --auth-id {{ pbs_tf_user }}
+  register: acl_update
+  changed_when: "'updated' in acl_update.stdout"
+  failed_when: acl_update.rc != 0 and 'already' not in acl_update.stderr
+
+# The tf TOKEN is what the PVE `pbs-garage` storage uses for vzdump backups AND
+# their keep-last prune. PBS tokens have their own ACL separate from the parent
+# user (privilege separation), so the DatastoreAdmin grant above (on the user)
+# does NOT give the token prune rights — vzdump then backs up fine but fails the
+# prune step ("missing Datastore.Modify|Datastore.Prune") and the
+# keep-last retention is never enforced. Grant the token DatastorePowerUser
+# (Backup + Read + Prune + Modify + Verify) so the job completes cleanly.
+- name: grant the tf TOKEN prune-capable role on datastore (vzdump prune)
+  ansible.builtin.command: >-
+    proxmox-backup-manager acl update /datastore/{{ pbs_datastore_id }}
+    DatastorePowerUser --auth-id '{{ pbs_tf_user }}!{{ pbs_tf_token_name }}'
+  register: token_acl_update
+  changed_when: "'updated' in token_acl_update.stdout"
+  failed_when: token_acl_update.rc != 0 and 'already' not in token_acl_update.stderr
+
+- name: list existing tokens for the tf user
+  ansible.builtin.command: >-
+    proxmox-backup-manager user list-tokens {{ pbs_tf_user }}
+    --output-format=json
+  register: pbs_token_list
+  changed_when: false
+
+- name: parse token list
+  ansible.builtin.set_fact:
+    pbs_tf_token_exists: >-
+      {{
+        (pbs_token_list.stdout | from_json
+          | selectattr('tokenid', 'equalto', pbs_tf_user + '!' + pbs_tf_token_name)
+          | list | length) > 0
+      }}
+
+- name: issue terraform API token
+  ansible.builtin.command: >-
+    proxmox-backup-manager user generate-token {{ pbs_tf_user }}
+    {{ pbs_tf_token_name }}
+    --output-format=json
+  register: pbs_tf_token_create
+  when: not pbs_tf_token_exists
+  changed_when: true
+  no_log: true
+
+- name: expose generated token as a host fact (Python launcher will read this)
+  ansible.builtin.set_fact:
+    tf_token_value: "{{ (pbs_tf_token_create.stdout | from_json).value }}"
+  when:
+    - not pbs_tf_token_exists
+    - pbs_tf_token_create is defined
+    - pbs_tf_token_create.stdout is defined
+  no_log: true

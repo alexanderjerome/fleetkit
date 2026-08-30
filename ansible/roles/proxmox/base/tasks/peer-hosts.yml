@@ -1,0 +1,15 @@
+---
+# /etc/hosts entries for every member of the Proxmox cluster. `pvecm add`
+# resolves member short-names; without this, joining or any inter-node API
+# call (tofu apply, live migration) breaks when fleet DNS is briefly down.
+#
+# fleet_domain_internal ↔ fleet.settings.domain.internal — when set, each
+# peer also gets a <name>.<internal-domain> alias.
+
+- name: ensure every cluster peer is in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^\d+\.\d+\.\d+\.\d+\s+{{ item.name }}(\s|$)'
+    line: "{{ item.ip }}  {{ item.name }}{% if fleet_domain_internal is defined %}  {{ item.name }}.{{ fleet_domain_internal }}{% endif %}"
+    state: present
+  loop: "{{ fleet_proxmox_cluster_hosts }}"

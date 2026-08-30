@@ -1,0 +1,55 @@
+---
+# Host-level CT liveness watchdog. Opt-in per host: set
+# `ct_watchdog_enable: true` in host vars. Probes every running CT with a
+# timed `pct exec`, alerts to the journal, and (by default)
+# force-restarts wedged CTs with a per-CT cooldown. See the script
+# template header for the rationale and tunables.
+#
+# Apply:
+#   fleet ansible run proxmox --limit <host> --tags ct-watchdog
+
+- name: render ct-watchdog script
+  ansible.builtin.template:
+    src: ct-watchdog.sh.j2
+    dest: /usr/local/sbin/ct-watchdog.sh
+    owner: root
+    group: root
+    mode: "0755"
+  when: ct_watchdog_enable | default(false)
+
+- name: render ct-watchdog service unit
+  ansible.builtin.template:
+    src: ct-watchdog.service.j2
+    dest: /etc/systemd/system/ct-watchdog.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: daemon-reload
+  when: ct_watchdog_enable | default(false)
+
+- name: render ct-watchdog timer unit
+  ansible.builtin.template:
+    src: ct-watchdog.timer.j2
+    dest: /etc/systemd/system/ct-watchdog.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: daemon-reload
+  when: ct_watchdog_enable | default(false)
+
+- name: enable + start ct-watchdog timer
+  ansible.builtin.systemd:
+    name: ct-watchdog.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: ct_watchdog_enable | default(false)
+
+# Hosts that had the watchdog and turned it off get cleaned up.
+- name: disable ct-watchdog where not enabled
+  ansible.builtin.systemd:
+    name: ct-watchdog.timer
+    enabled: false
+    state: stopped
+  failed_when: false
+  when: not (ct_watchdog_enable | default(false))

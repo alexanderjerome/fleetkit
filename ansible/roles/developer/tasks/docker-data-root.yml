@@ -1,0 +1,46 @@
+---
+# Point docker's data-root at the dev box's /data mount — volumes and
+# image layers persist on the big data disk instead of the rootfs.
+# Standard for every dev machine.
+#
+# Guard: only act when the target's parent mount actually exists, so a
+# box without a /data disk keeps the stock /var/lib/docker.
+
+- name: check whether {{ developer_docker_data_root | dirname }} is a mountpoint
+  ansible.builtin.command: "mountpoint -q {{ developer_docker_data_root | dirname }}"
+  register: dev_docker_data_mount
+  changed_when: false
+  failed_when: false
+
+- name: render /etc/docker/daemon.json (data-root)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {
+        "data-root": "{{ developer_docker_data_root }}"
+      }
+  register: dev_docker_daemon_json
+  when: dev_docker_data_mount.rc == 0
+
+- name: ensure the data-root directory exists (root-owned — dockerd requirement)
+  ansible.builtin.file:
+    path: "{{ developer_docker_data_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0710"
+  when: dev_docker_data_mount.rc == 0
+
+- name: restart docker to adopt the new data-root
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+  when: dev_docker_daemon_json.changed | default(false)
+
+- name: announce skip when no data mount exists
+  ansible.builtin.debug:
+    msg: "{{ developer_docker_data_root | dirname }} is not a mountpoint — keeping stock /var/lib/docker."
+  when: dev_docker_data_mount.rc != 0

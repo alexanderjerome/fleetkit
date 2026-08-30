@@ -1,0 +1,12 @@
+---
+# Generic proxmox play — only the shared bits. Use pve.yml / pbs.yml for
+# the role-specific pieces. Mostly useful for `--tags peer-hosts`,
+# `--tags apt-update`, etc. that should hit every PVE + PBS node.
+
+- hosts: proxmox
+  gather_facts: true
+  roles:
+    - role: base
+      tags: [base]
+    - role: proxmox/base
+      tags: [proxmox-base]

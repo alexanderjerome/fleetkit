@@ -1,0 +1,23 @@
+---
+- name: ensure bash-completion is present
+  ansible.builtin.apt:
+    name: bash-completion
+    state: present
+
+- name: add direnv hook to /etc/bash.bashrc
+  ansible.builtin.lineinfile:
+    path: /etc/bash.bashrc
+    line: 'eval "$(direnv hook bash)"'
+    regexp: '^eval "\$\(direnv hook bash\)"$'
+    state: present
+    create: true
+    mode: "0644"
+
+- name: source nix profile in /etc/bash.bashrc
+  ansible.builtin.lineinfile:
+    path: /etc/bash.bashrc
+    line: '[ -f /etc/profile.d/nix.sh ] && . /etc/profile.d/nix.sh'
+    regexp: '^\[ -f /etc/profile.d/nix.sh \].*$'
+    state: present
+    create: true
+    mode: "0644"

@@ -1,0 +1,57 @@
+---
+- name: ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: fetch Docker apt signing key
+  ansible.builtin.get_url:
+    url: "{{ developer_docker_repo_key_url }}"
+    dest: /etc/apt/keyrings/docker.gpg.tmp
+    mode: "0644"
+
+- name: dearmor Docker signing key (if needed)
+  ansible.builtin.shell: |
+    if file /etc/apt/keyrings/docker.gpg.tmp | grep -q 'PGP public key'; then
+      gpg --dearmor < /etc/apt/keyrings/docker.gpg.tmp > /etc/apt/keyrings/docker.gpg
+    else
+      mv /etc/apt/keyrings/docker.gpg.tmp /etc/apt/keyrings/docker.gpg
+    fi
+    rm -f /etc/apt/keyrings/docker.gpg.tmp
+  args:
+    creates: /etc/apt/keyrings/docker.gpg
+
+- name: register Docker apt source
+  ansible.builtin.apt_repository:
+    repo: "{{ developer_docker_apt_repo | replace('{distro_release}', ansible_distribution_release) }}"
+    state: present
+    filename: docker
+    update_cache: true
+
+- name: install Docker
+  ansible.builtin.apt:
+    name: "{{ developer_docker_packages }}"
+    state: present
+
+- name: ensure docker service is enabled
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+# Developer accounts get docker-socket access. Runs here (not in
+# user-ssh-keys.yml) because the docker group only exists once the
+# packages are installed. NOTE: group membership applies to NEW login
+# sessions only — an already-logged-in dev needs to re-login (or
+# `newgrp docker`) before `docker ps` works.
+- name: add developer accounts to the docker group
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: docker
+    append: true
+  loop: "{{ developer_authorized_users | unique }}"
+  loop_control:
+    label: "{{ item.user }}"

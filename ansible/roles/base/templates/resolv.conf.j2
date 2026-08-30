@@ -1,0 +1,10 @@
+# Rendered by ansible: roles/base/tasks/dns-pin.yml. Hand edits are
+# overwritten on next convergence — change fleet_dns_servers /
+# fleet_dns_search in your inventory instead.
+{% for server in fleet_dns_servers %}
+nameserver {{ server }}
+{% endfor %}
+{% if fleet_dns_search %}
+search {{ fleet_dns_search | join(' ') }}
+{% endif %}
+options edns0 trust-ad

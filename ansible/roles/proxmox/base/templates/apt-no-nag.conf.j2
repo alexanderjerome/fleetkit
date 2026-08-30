@@ -1,0 +1,7 @@
+// Rendered by ansible: roles/proxmox/base/tasks/subscription-nag.yml.
+// Re-applies the nag patch on every apt run so a pve-manager upgrade can't
+// silently re-enable the GUI dialog. Single-backslash escape is intentional
+// — apt parses this as one literal backslash.
+DPkg::Post-Invoke {
+  "if [ -f {{ proxmox_nag_target }} ]; then sed -i 's@\.data\.status\.toLowerCase() !== \"active\"@false@g' {{ proxmox_nag_target }} || true; fi";
+};

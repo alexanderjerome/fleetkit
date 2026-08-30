@@ -1,0 +1,17 @@
+---
+- name: install direnv
+  ansible.builtin.apt:
+    name: direnv
+    state: present
+
+- name: install nix-direnv via Nix (dev's user shell needs to source it)
+  ansible.builtin.shell: |
+    set -e
+    if ! /nix/var/nix/profiles/default/bin/nix profile list 2>/dev/null | grep -q nix-direnv; then
+      /nix/var/nix/profiles/default/bin/nix profile install nixpkgs#nix-direnv
+    fi
+  args:
+    executable: /bin/bash
+  register: nix_direnv_install
+  changed_when: "'is being installed' in nix_direnv_install.stdout or 'added' in nix_direnv_install.stdout"
+  failed_when: nix_direnv_install.rc != 0 and 'already installed' not in nix_direnv_install.stderr

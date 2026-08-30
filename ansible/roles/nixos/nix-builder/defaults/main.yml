@@ -1,0 +1,23 @@
+---
+# Ad-hoc build tasks on the fleet's NixOS builder host. Colmena owns the
+# declarative state of the builder itself — this role only triggers
+# imperative byproducts (template/ISO builds, NFS export refresh).
+
+# nix_builder_repo_path — path to the fleet repo checkout ON THE BUILDER
+# itself (this is where `nix build` runs from). REQUIRED — asserted in
+# tasks that build; no default because it is consumer-specific.
+
+# `nix build` invocation flags — keep noisy output off the playbook stream.
+nix_builder_build_flags: "--no-link --print-out-paths --quiet"
+
+# Output dirs the builder host exports over NFS to the fleet LAN.
+# Ansible uses them as drop targets for build outputs; the NFS export
+# itself is declared on the NixOS side.
+nix_builder_export_root: /data/nfs/store
+nix_builder_template_dir: "{{ nix_builder_export_root }}/pve-template-dir"
+nix_builder_iso_dir: "{{ nix_builder_export_root }}/iso-dir"
+
+# Flake outputs to build, mapped by --tags.
+nix_builder_template_attr: ".#nixosConfigurations.template-builder.config.system.build.toplevel"
+nix_builder_pve_iso_attr: ".#pve-answer-iso"
+nix_builder_pbs_iso_attr: ".#pbs-answer-iso"

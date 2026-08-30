@@ -1,0 +1,35 @@
+---
+# Most config comes from inventory group vars and per-host host vars.
+
+# The default host vars entry leaves secondary nics empty.
+pve_secondary_nics: []
+
+# 'creator' or 'joiner'. Override in host vars — only one host in the
+# cluster should be 'creator'.
+pve_cluster_role: joiner
+
+# Cluster name passed to `pvecm create` on the creator. Generic default;
+# override per fleet.
+pve_cluster_name: fleet-pve
+
+# pve_cluster_creator — inventory hostname of the cluster creator.
+# REQUIRED for joiners (asserted in cluster-join.yml); no default.
+
+# Cluster-wide NFS storage entries (nfs-storage.yml). Shape:
+#   pve_nfs_storages:
+#     - { name: nix-store, server: 192.0.2.101,
+#         export: /data/nfs/store, content: "iso,vztmpl" }
+pve_nfs_storages: []
+
+# PVE-native ACME. The acme.yml task only runs where a host sets
+# `pve_acme_domains` (host vars). Shared knobs:
+pve_acme_account: default
+pve_acme_plugin_id: cf-dns01
+pve_acme_directory: https://acme-v02.api.letsencrypt.org/directory
+# fleet_acme_email ↔ fleet.settings.acmeEmail — ACME account contact.
+#   REQUIRED (asserted) when pve_acme_domains is set; no default.
+# pve_acme_cf_token_sops_path — control-host path to the SOPS file
+#   holding the Cloudflare API token (Zone:Read + DNS:Edit on the public
+#   zone). REQUIRED (asserted) when pve_acme_domains is set; no default.
+# pve_acme_cf_token_sops_keys — nested key path into that SOPS file.
+pve_acme_cf_token_sops_keys: ["integrations", "cloudflare", "api_token"]

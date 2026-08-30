@@ -1,0 +1,7 @@
+---
+# `exportfs -ra` re-reads /etc/exports and reapplies the rule set without
+# dropping active mounts. Idempotent.
+
+- name: refresh NFS exports
+  ansible.builtin.command: exportfs -ra
+  changed_when: true

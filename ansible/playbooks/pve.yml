@@ -1,0 +1,10 @@
+---
+- hosts: pve
+  gather_facts: true
+  roles:
+    - role: base
+      tags: [base]
+    - role: proxmox/base
+      tags: [proxmox-base]
+    - role: proxmox/pve
+      tags: [pve]

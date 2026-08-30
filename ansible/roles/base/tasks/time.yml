@@ -1,0 +1,31 @@
+---
+- name: set system timezone
+  community.general.timezone:
+    name: "{{ fleet_timezone }}"
+
+# Unprivileged LXCs can't set the system clock (no CAP_SYS_TIME) and
+# inherit the host's clock anyway, so chrony there is dead weight at
+# best and crashloops at worst. Detect the LXC environment and skip.
+- name: detect container environment
+  ansible.builtin.command: systemd-detect-virt --container
+  register: container_detect
+  changed_when: false
+  failed_when: false
+
+- name: install chrony (VMs + host machines only)
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+  when: container_detect.stdout | trim == "none"
+
+- name: enable + start chrony (VMs + host machines only)
+  ansible.builtin.systemd:
+    name: chrony
+    state: started
+    enabled: true
+  when: container_detect.stdout | trim == "none"
+
+- name: announce — container detected, skipping chrony (inherits host clock)
+  ansible.builtin.debug:
+    msg: "Container env '{{ container_detect.stdout | trim }}' detected — skipping chrony. The host kernel's clock is what this LXC reads."
+  when: container_detect.stdout | trim != "none"

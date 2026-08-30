@@ -1,0 +1,29 @@
+---
+# /dev/net/tun passthrough for dev LXCs (tailscale needs a real TUN
+# device; Debian tailscaled doesn't fall back to userspace networking
+# the way our NixOS fleet config does). Runs ON the PVE host — the
+# in-CT roles can't reach /etc/pve/lxc/<id>.conf.
+#
+# host vars shape (on the PVE host entry):
+#   pve_tun_passthrough_cts: [250]
+#
+# A CT RESTART is required after the conf gains these lines — this
+# task deliberately does NOT restart anything (dev boxes have humans
+# on them); it reports which CTs need a reboot instead.
+
+- name: pass /dev/net/tun through to dev CTs
+  ansible.builtin.blockinfile:
+    path: "/etc/pve/lxc/{{ item }}.conf"
+    marker: "# {mark} ANSIBLE dev-lxc-tun"
+    block: |
+      lxc.cgroup2.devices.allow: c 10:200 rwm
+      lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+  register: pve_tun_conf
+  loop: "{{ pve_tun_passthrough_cts | default([]) }}"
+
+- name: announce CTs that need a restart to pick up TUN
+  ansible.builtin.debug:
+    msg: "CT {{ item.item }} conf updated — reboot it (pct reboot {{ item.item }}) to expose /dev/net/tun."
+  loop: "{{ pve_tun_conf.results }}"
+  loop_control: { label: "{{ item.item }}" }
+  when: item.changed

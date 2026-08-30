@@ -1,0 +1,29 @@
+---
+# Cluster-wide NFS storage entries (ISO images + LXC templates served
+# from a builder host's NFS exports — upload once, every node sees them).
+# storage.cfg is cluster-shared, so this is naturally run-once; the
+# grep guard makes re-runs no-ops from any member.
+#
+# Group vars shape:
+#   pve_nfs_storages:
+#     - { name: nix-store, server: 192.0.2.101,
+#         export: /data/nfs/store, content: "iso,vztmpl" }
+
+- name: probe existing NFS storage entries
+  ansible.builtin.command: "grep -q 'nfs: {{ item.name }}$' /etc/pve/storage.cfg"
+  register: pve_nfs_probe
+  changed_when: false
+  failed_when: false
+  loop: "{{ pve_nfs_storages | default([]) }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: register NFS storage
+  ansible.builtin.command: >-
+    pvesm add nfs {{ item.item.name }}
+    --server {{ item.item.server }}
+    --export {{ item.item.export }}
+    --content {{ item.item.content }}
+  when: item.rc != 0
+  loop: "{{ pve_nfs_probe.results }}"
+  loop_control: { label: "{{ item.item.name }}" }
+  changed_when: true

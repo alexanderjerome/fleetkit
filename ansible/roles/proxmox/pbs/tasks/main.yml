@@ -1,0 +1,28 @@
+---
+- name: require S3 backend configuration
+  ansible.builtin.assert:
+    that:
+      - pbs_s3_endpoint is defined
+      - pbs_s3_region is defined
+      - pbs_s3_bucket is defined
+      - pbs_garage_access_key_sops_path is defined
+      - pbs_garage_secret_key_sops_path is defined
+    fail_msg: >-
+      The proxmox/pbs role needs pbs_s3_endpoint, pbs_s3_region,
+      pbs_s3_bucket and the two SOPS credential paths
+      (pbs_garage_access_key_sops_path / pbs_garage_secret_key_sops_path)
+      set in your inventory — see roles/proxmox/pbs/defaults/main.yml for
+      the shapes.
+  tags: [pbs, garage-key, s3-config, datastore-config]
+
+- import_tasks: garage-key.yml
+  tags: [pbs, garage-key]
+
+- import_tasks: s3-config.yml
+  tags: [pbs, s3-config]
+
+- import_tasks: datastore-config.yml
+  tags: [pbs, datastore-config]
+
+- import_tasks: tf-token.yml
+  tags: [pbs, tf-token]

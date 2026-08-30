@@ -1,0 +1,13 @@
+---
+# One-shot: refresh the internal CA trust on every Debian-family host.
+# Use after rotating the internal CA root.
+#
+#   fleet ansible run tasks/refresh-ca-trust
+
+- hosts: "proxmox:developer"
+  gather_facts: false
+  become: true
+  tasks:
+    - import_role:
+        name: base
+        tasks_from: ca-trust

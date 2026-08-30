@@ -1,0 +1,30 @@
+---
+# Determinate Systems Nix installer — flakes + nix-command enabled by
+# default, opt-out of the upgrade nag, init scripts dropped into /etc/.
+# Pinned via developer_nix_installer_version so a fresh dev VM doesn't
+# randomly upgrade.
+
+- name: check if Nix is already installed
+  ansible.builtin.stat:
+    path: /nix/var/nix/profiles/default
+  register: nix_installed
+
+- name: download Determinate installer
+  ansible.builtin.get_url:
+    url: "{{ developer_nix_installer_url }}"
+    dest: /tmp/nix-installer.sh
+    mode: "0755"
+    force: true
+  when: not nix_installed.stat.exists
+
+- name: run Determinate installer
+  ansible.builtin.command:
+    cmd: "/tmp/nix-installer.sh install linux --no-confirm --determinate"
+  when: not nix_installed.stat.exists
+  changed_when: true
+
+- name: clean up installer script
+  ansible.builtin.file:
+    path: /tmp/nix-installer.sh
+    state: absent
+  when: not nix_installed.stat.exists

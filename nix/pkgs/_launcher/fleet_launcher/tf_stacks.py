@@ -321,7 +321,7 @@ def tf_preview(scope: str, target: tuple[str, ...]) -> None:
               help="Pass -auto-approve to tofu.")
 @click.option("--parallelism", default=3, type=int)
 @click.option("--inventory/--no-inventory", default=True, show_default=True,
-              help="After apply, refresh .cache/sk/hosts.json from XOA (qemu-guest-agent "
+              help="After apply, refresh .cache/fleet/hosts.json from XOA (qemu-guest-agent "
                    "IP discovery for XCP-ng VMs). Only triggers on env=infra leaves; "
                    "proxmox applies skip the refresh regardless.")
 def tf_apply(scope: str, target: tuple[str, ...], yes: bool, parallelism: int, inventory: bool) -> None:
@@ -329,7 +329,7 @@ def tf_apply(scope: str, target: tuple[str, ...], yes: bool, parallelism: int, i
 
     Post-apply inventory refresh policy:
 
-      - env=infra (XCP-ng/XOA) leaves: refresh .cache/sk/hosts.json so
+      - env=infra (XCP-ng/XOA) leaves: refresh .cache/fleet/hosts.json so
         tier-0 VMs' DHCP-assigned IPs land in the inventory.
       - env=platform / env=dev (Proxmox) leaves: skipped. Proxmox CT
         IPs are declared statically in fleet; no discovery needed and
@@ -361,7 +361,7 @@ def tf_apply(scope: str, target: tuple[str, ...], yes: bool, parallelism: int, i
             xoa_applied = True
 
     if inventory and xoa_applied:
-        console.print("[dim]── refreshing .cache/sk/hosts.json from XOA ──[/dim]")
+        console.print("[dim]── refreshing .cache/fleet/hosts.json from XOA ──[/dim]")
         try:
             from .inventory import generate_hosts_json
             generate_hosts_json(quiet=True)

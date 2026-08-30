@@ -8,7 +8,7 @@ import sys
 import click
 from rich.console import Console
 
-from ._util import find_project_root, run_shell
+from ._util import find_project_root, fleet_cache_dir, run_shell
 
 console = Console()
 
@@ -30,10 +30,10 @@ def builder_cache_key():
     and writes it to ``nix/secrets/secrets/keys/builder-cache-pub-key.pem``.
     """
     root = find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
 
     if not hosts_file.exists():
-        console.print("[red]ERROR:[/red] .cache/sk/hosts.json not found")
+        console.print("[red]ERROR:[/red] .cache/fleet/hosts.json not found")
         sys.exit(1)
 
     with open(hosts_file) as f:

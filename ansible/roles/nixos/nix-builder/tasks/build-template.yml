@@ -1,0 +1,37 @@
+---
+# Rebuild the PVE LXC template and copy the result into the NFS-exported
+# template directory. PVE nodes pull from there to provision new CTs.
+
+- name: require nix_builder_repo_path
+  ansible.builtin.assert:
+    that:
+      - nix_builder_repo_path is defined
+    fail_msg: >-
+      nix_builder_repo_path is required — the path to the fleet repo
+      checkout on the builder host (where `nix build` runs). Set it in
+      your inventory for the builder host.
+
+- name: ensure template export dir exists
+  ansible.builtin.file:
+    path: "{{ nix_builder_template_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: build PVE LXC template
+  ansible.builtin.command:
+    cmd: "nix build {{ nix_builder_build_flags }} {{ nix_builder_template_attr }}"
+    chdir: "{{ nix_builder_repo_path }}"
+  register: template_build
+  changed_when: true
+
+- name: copy template output into NFS export dir
+  ansible.builtin.shell: |
+    set -euo pipefail
+    out_path={{ template_build.stdout | trim }}
+    cp -L "$out_path"/tarball/*.tar.zst {{ nix_builder_template_dir }}/
+    chmod 0644 {{ nix_builder_template_dir }}/*.tar.zst
+  args:
+    executable: /bin/bash
+  changed_when: true

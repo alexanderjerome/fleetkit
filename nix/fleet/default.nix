@@ -241,7 +241,7 @@ in {
       description = ''
         { name → { hostname, vmid, ip, internal_ip, tags, pve_type,
                    cluster?, node_index? } } — serialised to
-        .cache/sk/hosts.json by `sk inventory generate`, consumed by the
+        .cache/fleet/hosts.json by `fleet inventory generate`, consumed by the
         NixOS side (hosts.nix) and by Colmena's deploy targeting.
       '';
     };
@@ -284,6 +284,11 @@ in {
     # be IP-discovered via XOA vs. PVE. The Proxmox path also benefits
     # from this for future multi-provider drift detection.
     provider_instance = meta.provider_instance;
+    # Non-null for non-NixOS guests (Debian LXCs/VMs booted from an
+    # explicit image). `fleet ansible inventory` uses it to place such
+    # containers into the debian_guests group; NixOS guests (image ==
+    # null) land in the nixos group instead.
+    image = meta.image or null;
     # "managed" | "external" — external hosts (INFRA-170 / ADR-080) are
     # Colmena-deployable but must be skipped by consumers that assume
     # fleet-network reachability (CoreDNS records, hypervisor drift).

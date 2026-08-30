@@ -1,0 +1,32 @@
+---
+# Conservative shipping defaults. The endpoint/bucket/credential values
+# are consumer-specific and REQUIRED — asserted in tasks/main.yml:
+#
+#   pbs_s3_endpoint          — S3-compatible endpoint URL backing the
+#                              datastore (e.g. an in-fleet Garage —
+#                              conceptually pairs with
+#                              fleet.settings.observability.lokiS3Endpoint's
+#                              Garage host, but PBS may use its own).
+#                              Example: https://s3.example.lan
+#   pbs_s3_region            — S3 region string (e.g. "garage").
+#   pbs_s3_bucket            — bucket name for PBS chunks.
+#   pbs_garage_access_key_sops_path / pbs_garage_secret_key_sops_path
+#                            — control-host paths to SOPS-encrypted files
+#                              holding the S3 credentials (community.sops
+#                              lookup; the target never sees the age key).
+
+pbs_s3_endpoint_id: garage-s3
+
+pbs_garage_credentials_dir: /root/.config/proxmox-backup/garage
+pbs_s3_config_path: /etc/proxmox-backup/s3.cfg
+pbs_datastore_config_path: /etc/proxmox-backup/datastore.cfg
+
+# Datastore name and on-disk location.
+pbs_datastore_id: store-1
+pbs_datastore_path: /datastore
+
+# Terraform user/token issued by tf-token.yml. Read the generated token
+# out of the `tf_token_value` host fact after the play runs and store it
+# in your secrets backend.
+pbs_tf_user: terraform@pbs
+pbs_tf_token_name: terraform

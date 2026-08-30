@@ -1,0 +1,24 @@
+---
+# Scaffold for tag-derived access scoping.
+#
+# Concept: every developer's access scope is derived from fleet tags. A
+# developer is granted passwordless sudo on resources tagged with one of
+# their permitted tags, and explicitly excluded from tags they shouldn't
+# reach.
+#
+# Right now this just drops one sudoers fragment per directory group
+# declared in developer_sudo_tag_grants. The list is empty by default so
+# the play is a no-op until a consumer populates it.
+
+- name: render per-group sudoers fragments
+  ansible.builtin.template:
+    src: sudoers-tag-grant.j2
+    dest: "/etc/sudoers.d/50-tag-grant-{{ item.ldap_group }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+  loop: "{{ developer_sudo_tag_grants }}"
+  loop_control:
+    label: "{{ item.ldap_group }}"
+  when: developer_sudo_tag_grants | length > 0

@@ -1,0 +1,31 @@
+---
+# Per-developer SSH keys come from host_vars/<host>.yml as a list of
+# {user, key} pairs:
+#
+#   developer_authorized_users:
+#     - { user: alice, key: "ssh-ed25519 AAAA... alice@laptop" }
+#
+# Each entry gets its own POSIX user with sudo membership and its key in
+# ~/.ssh/authorized_keys. NO LDAP — an IdP outage cannot lock the dev out.
+
+- name: ensure developer accounts exist
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    shell: /bin/bash
+    groups: sudo
+    append: true
+    create_home: true
+  loop: "{{ developer_authorized_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: install per-developer SSH key
+  ansible.posix.authorized_key:
+    user: "{{ item.user }}"
+    state: present
+    key: "{{ item.key }}"
+    exclusive: false
+    comment: "personal key for {{ item.user }} (managed by ansible)"
+  loop: "{{ developer_authorized_users }}"
+  loop_control:
+    label: "{{ item.user }}"

@@ -1,0 +1,183 @@
+---
+# Idempotent cluster bring-up. Three states:
+#   - already in any cluster   → skip
+#   - cluster_role=creator     → `pvecm create <name>` (only if not yet a cluster)
+#   - cluster_role=joiner      → mutual SSH-key distribute + `pvecm add --use_ssh`
+#
+# The mutual SSH-key step is load-bearing. `pvecm add --use_ssh` internally
+# calls `ssh-copy-id` to push the joiner's pubkey to the creator's
+# authorized_keys. That fails (exit 1 + "unable to copy ssh ID") when:
+#   a. The creator doesn't already trust the joiner's root key, AND
+#   b. ssh-copy-id can't authenticate to push the key (no password set)
+# We pre-distribute the keys via delegate_to BEFORE running pvecm add,
+# so the SSH-copy-id step is idempotent (key already there → exits 0).
+
+- name: probe current cluster status
+  ansible.builtin.command: pvecm status
+  register: pvecm_status
+  changed_when: false
+  failed_when: false
+
+- name: set fact — already clustered
+  ansible.builtin.set_fact:
+    pve_already_clustered: "{{ pvecm_status.rc == 0 and 'Cluster information' in pvecm_status.stdout }}"
+
+- name: require pve_cluster_creator on joiners
+  ansible.builtin.assert:
+    that:
+      - pve_cluster_creator is defined
+    fail_msg: >-
+      pve_cluster_creator is required on joiner nodes — set it (group
+      vars for the `pve` group) to the inventory hostname of the cluster
+      creator, and list every cluster member with its IP in
+      fleet_proxmox_cluster_hosts (proxmox/base role) so the creator's
+      address can be resolved without DNS.
+  when: pve_cluster_role == 'joiner'
+
+- name: create cluster (creator host only, first apply)
+  ansible.builtin.command: "pvecm create {{ pve_cluster_name }}"
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'creator'
+  changed_when: true
+
+- name: locate the creator's IP
+  ansible.builtin.set_fact:
+    pve_cluster_creator_ip: >-
+      {{ (fleet_proxmox_cluster_hosts | selectattr('name', 'equalto', pve_cluster_creator) | first).ip }}
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+# Ensure the joiner has a root SSH keypair (PVE installer generates id_rsa
+# at install time; safety net for fresh hosts that lack one).
+- name: ensure joiner root SSH keypair exists
+  ansible.builtin.user:
+    name: root
+    generate_ssh_key: true
+    ssh_key_type: rsa
+    ssh_key_file: .ssh/id_rsa
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+- name: read joiner's root pubkey
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_rsa.pub
+  register: joiner_root_pubkey
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+# Push the joiner's pubkey into the creator's authorized_keys so pvecm's
+# internal ssh-copy-id is a no-op rather than failing.
+- name: distribute joiner's root pubkey to cluster creator
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ joiner_root_pubkey.content | b64decode | trim }}"
+    state: present
+    exclusive: false
+    comment: "cluster-join: {{ inventory_hostname }} (managed by ansible)"
+  delegate_to: "{{ pve_cluster_creator }}"
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+# Pre-accept the creator's host key on the joiner so ssh-copy-id doesn't
+# hang on an interactive yes/no prompt.
+- name: pre-accept creator's host key on joiner
+  ansible.builtin.known_hosts:
+    name: "{{ pve_cluster_creator_ip }}"
+    key: "{{ lookup('pipe', 'ssh-keyscan -H ' + pve_cluster_creator_ip) }}"
+    path: /root/.ssh/known_hosts
+    state: present
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+- name: join cluster (joiner host only, first apply)
+  ansible.builtin.command: >-
+    pvecm add {{ pve_cluster_creator_ip }} --use_ssh
+  register: pvecm_add
+  when:
+    - not pve_already_clustered
+    - pve_cluster_role == 'joiner'
+  # pvecm add exits 0 even when the join silently failed (e.g. ssh-copy-id
+  # error). Detect success by grepping for "successfully added node".
+  failed_when:
+    - pvecm_add is defined
+    - pvecm_add.rc != 0 or ('successfully added node' not in (pvecm_add.stdout | default('')))
+  changed_when:
+    - pvecm_add is defined
+    - "'successfully added node' in (pvecm_add.stdout | default(''))"
+
+# ── Corosync config-version refresh (already-clustered members) ─────
+# A node that was halted while the cluster's membership changed comes
+# back with a stale /etc/corosync/corosync.conf. Corosync then starts,
+# joins knet, notices the cluster runs a NEWER config_version, and
+# exits with status 1 — pmxcfs drops to local mode, pveproxy serves
+# 401s, and the node shows red in the UI.
+#
+# Fix: compare config_version against the creator's live cluster copy
+# (/etc/pve/corosync.conf) and, if the cluster is newer, install it
+# locally + restart corosync/pve-cluster. Fresh joins skip this —
+# `pvecm add` writes the current config anyway.
+
+- name: read local corosync config_version
+  ansible.builtin.shell: "grep -oE 'config_version: *[0-9]+' /etc/corosync/corosync.conf | grep -oE '[0-9]+'"
+  register: pve_corosync_cv_local
+  changed_when: false
+  failed_when: false
+  when:
+    - pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+- name: read cluster corosync config_version (creator's /etc/pve copy)
+  ansible.builtin.shell: "grep -oE 'config_version: *[0-9]+' /etc/pve/corosync.conf | grep -oE '[0-9]+'"
+  delegate_to: "{{ pve_cluster_creator }}"
+  register: pve_corosync_cv_cluster
+  changed_when: false
+  failed_when: false
+  when:
+    - pve_already_clustered
+    - pve_cluster_role == 'joiner'
+
+- name: set fact — corosync config is stale
+  ansible.builtin.set_fact:
+    pve_corosync_stale: >-
+      {{ pve_already_clustered
+         and pve_cluster_role == 'joiner'
+         and (pve_corosync_cv_local.stdout | default('')) != ''
+         and (pve_corosync_cv_cluster.stdout | default('')) != ''
+         and (pve_corosync_cv_cluster.stdout | int) > (pve_corosync_cv_local.stdout | int) }}
+
+- name: fetch current cluster corosync.conf from creator
+  ansible.builtin.slurp:
+    src: /etc/pve/corosync.conf
+  delegate_to: "{{ pve_cluster_creator }}"
+  register: pve_corosync_cluster_conf
+  when: pve_corosync_stale | default(false)
+
+- name: install refreshed corosync.conf
+  ansible.builtin.copy:
+    content: "{{ pve_corosync_cluster_conf.content | b64decode }}"
+    dest: /etc/corosync/corosync.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: pve_corosync_stale | default(false)
+
+- name: restart corosync + pmxcfs after config refresh
+  ansible.builtin.shell: |
+    systemctl reset-failed corosync 2>/dev/null || true
+    systemctl restart corosync
+    systemctl restart pve-cluster
+  when: pve_corosync_stale | default(false)
+  changed_when: true
+
+- name: verify quorum after refresh
+  ansible.builtin.command: pvecm status
+  register: pve_corosync_postcheck
+  failed_when: "'Quorate' not in pve_corosync_postcheck.stdout"
+  changed_when: false
+  when: pve_corosync_stale | default(false)

@@ -1,0 +1,21 @@
+---
+# Pull Garage access + secret keys from SOPS (control host) and drop them on
+# PBS. Used by s3.cfg below. Targets never see the SOPS age key.
+
+- name: load Garage access key from SOPS
+  ansible.builtin.set_fact:
+    pbs_garage_access_key: "{{ lookup('community.sops.sops', pbs_garage_access_key_sops_path) }}"
+  no_log: true
+
+- name: load Garage secret key from SOPS
+  ansible.builtin.set_fact:
+    pbs_garage_secret_key: "{{ lookup('community.sops.sops', pbs_garage_secret_key_sops_path) }}"
+  no_log: true
+
+- name: ensure credential dir exists
+  ansible.builtin.file:
+    path: "{{ pbs_garage_credentials_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"

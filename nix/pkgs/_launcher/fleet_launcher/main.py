@@ -56,6 +56,8 @@ from fleet_launcher.remote import remote
 from fleet_launcher.sessions import sessions_cli
 from fleet_launcher.pki_group import pki
 from fleet_launcher.catalog_group import catalog
+from fleet_launcher.ansible_group import ansible as ansible_cli
+from fleet_launcher.mcp_group import mcp as mcp_cli
 
 
 # ── Root group ────────────────────────────────────────────────
@@ -91,6 +93,7 @@ def fleet(ctx: click.Context) -> None:
 # ── Top-level groups ──────────────────────────────────────────
 
 fleet.add_command(deploy)
+fleet.add_command(mcp_cli, "mcp")
 fleet.add_command(inventory_cli, "inventory")
 fleet.add_command(bootstraps)
 fleet.add_command(devtools)
@@ -98,6 +101,7 @@ fleet.add_command(remote)
 fleet.add_command(sessions_cli, "sessions")
 fleet.add_command(pki)
 fleet.add_command(catalog)
+fleet.add_command(ansible_cli, "ansible")
 
 from .xoa_group import xoa as _xoa
 fleet.add_command(_xoa)
@@ -177,16 +181,34 @@ def _setup_env() -> None:
 
     # ── fleetkit-managed runtime env ──────────────────────────────
     # Paths the toolchain (tofu, its ansible provider, sops) needs.
-    # These are FRAMEWORK conventions, not user configuration: ansible
-    # tree layout is what the terranix emitters generate for, and the
+    # These are FRAMEWORK conventions, not user configuration: the
+    # ansible tree ships with fleetkit (resolved via FLEET_ANSIBLE_DIR
+    # or the repo checkout), the inventory is GENERATED from the fleet
+    # manifest (`fleet ansible inventory` → .cache/fleet/
+    # ansible-inventory.yml — no static inventory exists), and the
     # plugin cache is a plain performance win. Everything is setdefault
-    # so an operator export still overrides.
-    ansible_dir = root / "ansible"
-    if ansible_dir.is_dir():
-        os.environ.setdefault("ANSIBLE_CONFIG", str(ansible_dir / "ansible.cfg"))
-        os.environ.setdefault("ANSIBLE_ROLES_PATH", str(ansible_dir / "roles"))
-        os.environ.setdefault("ANSIBLE_INVENTORY", str(ansible_dir / "inventory/static.yml"))
-        os.environ.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
+    # so an operator export still overrides. A consumer repo may carry
+    # its own ansible/ tree; its config and roles take precedence over
+    # the framework's.
+    from .ansible_group import framework_ansible_dir
+    consumer_ansible = root / "ansible"
+    framework_ansible = framework_ansible_dir()
+    roles_paths = [p for p in (
+        consumer_ansible / "roles",
+        (framework_ansible / "roles") if framework_ansible else None,
+    ) if p is not None and p.is_dir()]
+    if roles_paths:
+        os.environ.setdefault(
+            "ANSIBLE_ROLES_PATH", ":".join(str(p) for p in roles_paths))
+    for cfg in (consumer_ansible / "ansible.cfg",
+                (framework_ansible / "ansible.cfg") if framework_ansible else None):
+        if cfg is not None and cfg.is_file():
+            os.environ.setdefault("ANSIBLE_CONFIG", str(cfg))
+            break
+    from ._util import fleet_cache_dir
+    os.environ.setdefault(
+        "ANSIBLE_INVENTORY", str(fleet_cache_dir(root) / "ansible-inventory.yml"))
+    os.environ.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
     os.environ.setdefault(
         "TF_PLUGIN_CACHE_DIR",
         os.path.expanduser("~/.cache/opentofu/plugin-cache"))

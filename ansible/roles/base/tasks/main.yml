@@ -1,0 +1,18 @@
+---
+- import_tasks: baseline-packages.yml
+  tags: [base, baseline-packages]
+
+- import_tasks: dns-pin.yml
+  tags: [base, dns-pin]
+
+- import_tasks: sysadmin-ssh.yml
+  tags: [base, sysadmin-ssh]
+
+- import_tasks: ca-trust.yml
+  tags: [base, ca-trust]
+
+- import_tasks: time.yml
+  tags: [base, time]
+
+- import_tasks: tailnet-enroll.yml
+  tags: [base, tailnet-enroll]

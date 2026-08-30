@@ -28,7 +28,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from ._util import find_project_root
+from ._util import find_project_root, fleet_cache_dir
 from .secrets import _sops_set, _find_secrets_file, _ensure_age_key
 
 console = Console()
@@ -36,7 +36,7 @@ console = Console()
 
 def _host_internal_ip(host: str) -> str | None:
     """Look up a host's internal IP from the generated inventory."""
-    hosts_file = find_project_root() / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir() / "hosts.json"
     if not hosts_file.exists():
         return None
     entry = json.loads(hosts_file.read_text()).get(host, {})

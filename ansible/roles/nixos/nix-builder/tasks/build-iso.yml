@@ -1,0 +1,55 @@
+---
+# Rebuild the PVE + PBS installer ISOs and copy them into the NFS-exported
+# ISO dir, so fresh installs (PVE answer-file, PBS answer-file) boot the
+# latest ISO from the hypervisor's ISO storage.
+
+- name: require nix_builder_repo_path
+  ansible.builtin.assert:
+    that:
+      - nix_builder_repo_path is defined
+    fail_msg: >-
+      nix_builder_repo_path is required — the path to the fleet repo
+      checkout on the builder host (where `nix build` runs). Set it in
+      your inventory for the builder host.
+
+- name: ensure ISO export dir exists
+  ansible.builtin.file:
+    path: "{{ nix_builder_iso_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: build PVE answer-file ISO
+  ansible.builtin.command:
+    cmd: "nix build {{ nix_builder_build_flags }} {{ nix_builder_pve_iso_attr }}"
+    chdir: "{{ nix_builder_repo_path }}"
+  register: pve_iso_build
+  changed_when: true
+
+- name: copy PVE ISO into NFS export
+  ansible.builtin.shell: |
+    set -euo pipefail
+    out_path={{ pve_iso_build.stdout | trim }}
+    cp -L "$out_path"/iso/*.iso {{ nix_builder_iso_dir }}/pve-answer.iso
+    chmod 0644 {{ nix_builder_iso_dir }}/pve-answer.iso
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: build PBS answer-file ISO
+  ansible.builtin.command:
+    cmd: "nix build {{ nix_builder_build_flags }} {{ nix_builder_pbs_iso_attr }}"
+    chdir: "{{ nix_builder_repo_path }}"
+  register: pbs_iso_build
+  changed_when: true
+
+- name: copy PBS ISO into NFS export
+  ansible.builtin.shell: |
+    set -euo pipefail
+    out_path={{ pbs_iso_build.stdout | trim }}
+    cp -L "$out_path"/iso/*.iso {{ nix_builder_iso_dir }}/pbs-answer.iso
+    chmod 0644 {{ nix_builder_iso_dir }}/pbs-answer.iso
+  args:
+    executable: /bin/bash
+  changed_when: true

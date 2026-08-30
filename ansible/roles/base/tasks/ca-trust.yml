@@ -1,0 +1,35 @@
+---
+# Install the fleet-internal CA root into the system trust store so internal
+# HTTPS targets (reverse proxy, S3, PVE API peers, internal registries)
+# validate without -k / insecure flags.
+#
+# Soft-skips when fleet_ca_cert_path is undefined — mirrors the null
+# semantics of fleet.settings.internalCa.certFile (no internal CA ⇒ no
+# trust to ship).
+
+- name: announce — no internal CA configured (skipping ca-trust)
+  ansible.builtin.debug:
+    msg: >-
+      fleet_ca_cert_path is not set — skipping internal CA trust. Set it
+      to the control-host path of your CA root certificate (mirrors
+      fleet.settings.internalCa.certFile) to enable.
+  when: fleet_ca_cert_path is not defined
+
+- name: ensure local CA directory exists
+  ansible.builtin.file:
+    path: /usr/local/share/ca-certificates
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: fleet_ca_cert_path is defined
+
+- name: ship internal CA root
+  ansible.builtin.copy:
+    src: "{{ fleet_ca_cert_path }}"
+    dest: "/usr/local/share/ca-certificates/{{ fleet_ca_cert_name }}.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: update ca trust
+  when: fleet_ca_cert_path is defined

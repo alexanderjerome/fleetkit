@@ -15,7 +15,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ._util import find_project_root, run_shell
+from ._util import find_project_root, fleet_cache_dir, run_shell
 
 console = Console()
 
@@ -101,7 +101,7 @@ def _check_no_concurrent_deploy(host_names: tuple[str, ...] | None = None) -> No
 def _check_remote_builder() -> None:
     """Check if the remote Nix builder (tagged 'builder') is SSH-reachable."""
     root = find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
     if not hosts_file.exists():
         return
 
@@ -253,7 +253,7 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
         # Patch hosts.json temporarily with override IP
         import json
         root = find_project_root()
-        hosts_file = root / ".cache" / "sk" / "hosts.json"
+        hosts_file = fleet_cache_dir(root) / "hosts.json"
         with open(hosts_file) as f:
             hosts = json.load(f)
         name = names[0]
@@ -473,7 +473,7 @@ def list_hosts():
     if result.returncode != 0:
         # Fallback to hosts.json
         root = find_project_root()
-        hosts_file = root / ".cache" / "sk" / "hosts.json"
+        hosts_file = fleet_cache_dir(root) / "hosts.json"
         if hosts_file.exists():
             with open(hosts_file) as f:
                 hosts = json.load(f)
@@ -503,14 +503,14 @@ def list_hosts():
 def list_tags():
     """List all tags/stacks currently in use across hosts.
 
-    Reads ``.cache/sk/hosts.json`` and aggregates all unique tags,
+    Reads ``.cache/fleet/hosts.json`` and aggregates all unique tags,
     showing which hosts belong to each.
     """
     root = find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
 
     if not hosts_file.exists():
-        console.print("[red]ERROR:[/red] .cache/sk/hosts.json not found")
+        console.print("[red]ERROR:[/red] .cache/fleet/hosts.json not found")
         sys.exit(1)
 
     with open(hosts_file) as f:

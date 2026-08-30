@@ -1,0 +1,30 @@
+---
+# All of these can be overridden in inventory group vars or per-host
+# host vars. Keep this file as the single source of "what's the safe
+# shipping default" for proxmox/base tasks.
+
+proxmox_use_no_subscription_repos: true
+proxmox_suppress_subscription_nag: true
+
+# /etc/hosts entries for every member of the Proxmox cluster, rendered by
+# peer-hosts.yml. `pvecm add` resolves member short-names; without this,
+# joining or any inter-node API call breaks when fleet DNS is briefly
+# down. Shape:
+#   fleet_proxmox_cluster_hosts:
+#     - { name: pve-1, ip: 192.0.2.98 }
+#     - { name: pbs,   ip: 192.0.2.99 }
+fleet_proxmox_cluster_hosts: []
+
+# Default VGs to attempt growing. Override in host vars when a host adds
+# a third VG (e.g. attached data disks).
+grow_storage_vgs:
+  - pve
+  - pbs
+
+# Per-LV growth policy. Each entry is { vg, lv, extend } where `extend` is
+# a `lvresize -l` arg (e.g. "+100%FREE", "+10G"). Default grows ONLY the
+# data thin pool because that's where workload disks live on stock PVE.
+# Override in host vars when a host needs its root LV grown too.
+grow_storage_lvs:
+  - { vg: pve, lv: data, extend: "+100%FREE" }
+  - { vg: pbs, lv: data, extend: "+100%FREE" }

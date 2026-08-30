@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Rendered by ansible: roles/proxmox/base/tasks/ct-watchdog.yml.
+# Host-level CT liveness watchdog.
+#
+# Why: an in-container stall watchdog cannot help when the WHOLE
+# container wedges — a CT can sit dark with init in D-state and
+# `pct exec` timing out. Only the PVE host can see and fix that state.
+#
+# What: every timer tick, probe each RUNNING container with
+# `pct exec <id> -- /bin/sh -c 'exit 0'` under a timeout (a D-state-wedged
+# init cannot answer). On failure: retry once in-sweep, alert to the journal
+# (`logger -t ct-watchdog`, picked up by any host-level log shipping)
+# and write node_exporter textfile metrics when the textfile dir exists. A CT is only restarted after FAILS_REQUIRED
+# CONSECUTIVE failed sweeps (persisted in $STATE_DIR) — a single slow
+# sweep under host load never triggers action. When auto-restart is
+# enabled, force a `pct stop` + `pct start` with a per-CT cooldown AND a
+# host-global rate limit (at most one CT restart per GLOBAL_COOLDOWN_S),
+# so a host-wide stall (load 50, all probes timing out) can never turn
+# into a fleet-wide bounce storm.
+#
+# Tunables live in ansible (host_vars / group_vars), not here:
+#   ct_watchdog_probe_timeout / _stop_timeout / _cooldown_s
+#   ct_watchdog_fails_required / _global_cooldown_s
+#   ct_watchdog_restart (bool) / ct_watchdog_exclude_vmids (list)
+set -u
+
+PROBE_TIMEOUT="{{ ct_watchdog_probe_timeout | default(15) }}"
+STOP_TIMEOUT="{{ ct_watchdog_stop_timeout | default(90) }}"
+RESTART_ENABLED="{{ '1' if (ct_watchdog_restart | default(true)) else '0' }}"
+COOLDOWN_S="{{ ct_watchdog_cooldown_s | default(1800) }}"
+FAILS_REQUIRED="{{ ct_watchdog_fails_required | default(3) }}"
+GLOBAL_COOLDOWN_S="{{ ct_watchdog_global_cooldown_s | default(900) }}"
+EXCLUDE_VMIDS="{{ ct_watchdog_exclude_vmids | default([]) | join(' ') }}"
+STATE_DIR=/var/lib/ct-watchdog
+TEXTFILE_DIR=/var/lib/prometheus/node-exporter
+
+mkdir -p "$STATE_DIR"
+now=$(date +%s)
+metrics=""
+
+probe() {
+  timeout "$PROBE_TIMEOUT" pct exec "$1" -- /bin/sh -c 'exit 0' >/dev/null 2>&1
+}
+
+restarts_of() {
+  cat "$STATE_DIR/restarts-$1" 2>/dev/null || echo 0
+}
+
+fails_of() {
+  cat "$STATE_DIR/fails-$1" 2>/dev/null || echo 0
+}
+
+for id in $(pct list 2>/dev/null | awk 'NR>1 && $2=="running" {print $1}'); do
+  for ex in $EXCLUDE_VMIDS; do
+    [ "$id" = "$ex" ] && continue 2
+  done
+
+  if probe "$id"; then
+    rm -f "$STATE_DIR/fails-$id"
+    metrics+="ct_watchdog_probe_success{vmid=\"$id\"} 1"$'\n'
+    metrics+="ct_watchdog_restarts_total{vmid=\"$id\"} $(restarts_of "$id")"$'\n'
+    continue
+  fi
+  sleep 3  # one retry — don't flap on transient host load
+  if probe "$id"; then
+    rm -f "$STATE_DIR/fails-$id"
+    metrics+="ct_watchdog_probe_success{vmid=\"$id\"} 1"$'\n'
+    metrics+="ct_watchdog_restarts_total{vmid=\"$id\"} $(restarts_of "$id")"$'\n'
+    continue
+  fi
+
+  fails=$(( $(fails_of "$id") + 1 ))
+  echo "$fails" > "$STATE_DIR/fails-$id"
+  logger -t ct-watchdog -p daemon.err \
+    "CT $id unresponsive: pct exec probe timed out twice (${PROBE_TIMEOUT}s each) — consecutive failed sweeps: ${fails}/${FAILS_REQUIRED}"
+  metrics+="ct_watchdog_probe_success{vmid=\"$id\"} 0"$'\n'
+
+  if [ "$RESTART_ENABLED" != "1" ] || [ "$fails" -lt "$FAILS_REQUIRED" ]; then
+    metrics+="ct_watchdog_restarts_total{vmid=\"$id\"} $(restarts_of "$id")"$'\n'
+    continue
+  fi
+
+  stamp="$STATE_DIR/last-restart-$id"
+  last=$(cat "$stamp" 2>/dev/null || echo 0)
+  if [ $((now - last)) -lt "$COOLDOWN_S" ]; then
+    logger -t ct-watchdog -p daemon.err \
+      "CT $id STILL unresponsive but was watchdog-restarted $((now - last))s ago (< ${COOLDOWN_S}s cooldown) — not restarting again; manual attention required"
+    metrics+="ct_watchdog_restarts_total{vmid=\"$id\"} $(restarts_of "$id")"$'\n'
+    continue
+  fi
+
+  # Host-global rate limit: at most one CT restart per GLOBAL_COOLDOWN_S,
+  # across ALL CTs. A host-wide stall makes every probe fail; restarting
+  # one container at a time keeps the blast radius bounded and gives the
+  # host a chance to recover between actions.
+  glast=$(cat "$STATE_DIR/last-restart-global" 2>/dev/null || echo 0)
+  if [ $((now - glast)) -lt "$GLOBAL_COOLDOWN_S" ]; then
+    logger -t ct-watchdog -p daemon.err \
+      "CT $id eligible for restart but another CT was restarted $((now - glast))s ago (< ${GLOBAL_COOLDOWN_S}s global limit) — deferring"
+    metrics+="ct_watchdog_restarts_total{vmid=\"$id\"} $(restarts_of "$id")"$'\n'
+    continue
+  fi
+
+  echo "$now" > "$STATE_DIR/last-restart-global"
+  rm -f "$STATE_DIR/fails-$id"
+  echo "$now" > "$stamp"
+  echo $(( $(restarts_of "$id") + 1 )) > "$STATE_DIR/restarts-$id"
+  logger -t ct-watchdog -p daemon.warning \
+    "restarting wedged CT $id (pct stop, timeout ${STOP_TIMEOUT}s)"
+  if ! timeout "$STOP_TIMEOUT" pct stop "$id" >/dev/null 2>&1; then
+    logger -t ct-watchdog -p daemon.err \
+      "pct stop $id failed/timed out — attempting pct start anyway"
+  fi
+  sleep 3
+  if timeout "$STOP_TIMEOUT" pct start "$id" >/dev/null 2>&1; then
+    logger -t ct-watchdog -p daemon.warning "CT $id restarted by watchdog"
+  else
+    logger -t ct-watchdog -p daemon.err \
+      "CT $id FAILED to start after watchdog restart — manual intervention required"
+  fi
+  metrics+="ct_watchdog_restarts_total{vmid=\"$id\"} $(restarts_of "$id")"$'\n'
+done
+
+# node_exporter textfile metrics — a no-op until a host-level
+# node_exporter exists; written atomically when the directory exists.
+if [ -d "$TEXTFILE_DIR" ]; then
+  tmp="$TEXTFILE_DIR/.ct-watchdog.prom.$$"
+  {
+    echo "# HELP ct_watchdog_probe_success 1 = CT answered the pct exec liveness probe."
+    echo "# TYPE ct_watchdog_probe_success gauge"
+    echo "# HELP ct_watchdog_restarts_total Cumulative watchdog-initiated CT restarts."
+    echo "# TYPE ct_watchdog_restarts_total counter"
+    printf '%s' "$metrics"
+    echo "# HELP ct_watchdog_last_run_timestamp_seconds Unix time of the last watchdog sweep."
+    echo "# TYPE ct_watchdog_last_run_timestamp_seconds gauge"
+    echo "ct_watchdog_last_run_timestamp_seconds $now"
+  } > "$tmp" && mv "$tmp" "$TEXTFILE_DIR/ct-watchdog.prom"
+fi
+
+exit 0

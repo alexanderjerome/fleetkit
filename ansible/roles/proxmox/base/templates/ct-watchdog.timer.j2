@@ -1,0 +1,15 @@
+[Unit]
+# Rendered by ansible: roles/proxmox/base/tasks/ct-watchdog.yml.
+Description=Periodic host-level CT liveness watchdog
+
+[Timer]
+# Give the host and its CTs time to settle after boot before probing.
+OnBootSec={{ ct_watchdog_on_boot_sec | default('10min') }}
+# 5min sweeps x 3 consecutive failed sweeps (script default) = ~15min from
+# first failure to action — deliberate: a slow trigger can never bounce a
+# merely-overloaded CT, and a real wedge is already minutes-old news.
+OnUnitActiveSec={{ ct_watchdog_interval | default('5min') }}
+RandomizedDelaySec=15
+
+[Install]
+WantedBy=timers.target

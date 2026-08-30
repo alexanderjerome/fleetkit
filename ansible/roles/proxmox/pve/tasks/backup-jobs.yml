@@ -1,0 +1,50 @@
+---
+# Reconcile PVE cluster vzdump backup jobs from `pve_backup_jobs`.
+#
+# Idempotent: a job is keyed by its stable `id`; if present we `set`, else
+# `create --id`. One job with multiple vmids runs them SEQUENTIALLY, so backup
+# reads don't stack on the workload disks. Snapshot mode = no downtime
+# (LVM-thin; most databases are crash-consistent). `bwlimit` + `ionice 7`
+# keep the read load off live workloads; metadata change-detection cuts the
+# full LXC re-read PBS would otherwise do every run (no dirty-bitmap for
+# containers).
+#
+# What-to-include per guest is the fleet `backup` flag (mpN ...,backup=1); this
+# task only defines WHEN/HOW the job runs. Declared per node via host vars:
+#   pve_backup_jobs:
+#     - id: daily-tier-a
+#       storage: pbs-store
+#       vmids: [202, 203]
+#       schedule: "02:30"
+#       keep_last: 2
+
+- name: Read existing cluster backup jobs
+  ansible.builtin.command: pvesh get /cluster/backup --output-format json
+  register: _pve_backup_existing
+  changed_when: false
+
+- name: Reconcile vzdump backup job(s)
+  ansible.builtin.command: >-
+    pvesh
+    {{ ('set /cluster/backup/' ~ item.id)
+       if item.id in (_pve_backup_existing.stdout | from_json | map(attribute='id') | list)
+       else ('create /cluster/backup --id ' ~ item.id) }}
+    --storage {{ item.storage }}
+    --node {{ inventory_hostname }}
+    --vmid {{ item.vmids | join(',') }}
+    --mode {{ item.mode | default('snapshot') }}
+    --schedule "{{ item.schedule }}"
+    --prune-backups "keep-last={{ item.keep_last | default(1) }}"
+    --ionice {{ item.ionice | default(7) }}
+    --enabled 1
+    {% if (item.bwlimit | default(0) | int) > 0 %}--bwlimit {{ item.bwlimit }}{% endif %}
+    {% if item.change_detection_mode | default('') %}--pbs-change-detection-mode {{ item.change_detection_mode }}{% endif %}
+    --comment "fleet-managed:{{ item.id }}"
+    --notes-template "{{ item.notes | default('fleet backup — ' ~ item.id) }}"
+  loop: "{{ pve_backup_jobs }}"
+  loop_control:
+    label: "{{ item.id }} (vmids {{ item.vmids | join(',') }})"
+  register: _pve_backup_reconcile
+  # Manual reconcile job; pvesh set/create both exit 0 on success. We report
+  # changed on a successful apply rather than diffing every backup field.
+  changed_when: _pve_backup_reconcile.rc == 0

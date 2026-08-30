@@ -1,0 +1,16 @@
+---
+- name: ensure datastore mount point exists
+  ansible.builtin.file:
+    path: "{{ pbs_datastore_path }}"
+    state: directory
+    owner: backup
+    group: backup
+    mode: "0750"
+
+- name: render /etc/proxmox-backup/datastore.cfg
+  ansible.builtin.template:
+    src: datastore.cfg.j2
+    dest: "{{ pbs_datastore_config_path }}"
+    owner: root
+    group: backup
+    mode: "0640"

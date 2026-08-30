@@ -1,0 +1,165 @@
+---
+# Enrol the host on the headscale-managed fleet tailnet. Pulls a one-shot
+# preauth key from a key-issuer endpoint (fleet_tailnet_preauth_url), then
+# runs tailscale up. Mirrors the validation in the fleetkit NixOS
+# tailscale module — preauth keys must carry the fleet_tailnet_key_prefix;
+# proxy stubs and empty bodies are rejected.
+#
+# Soft-skips entirely when fleet_tailnet_control_url is undefined —
+# mirrors the null semantics of fleet.settings.tailnet.controlUrl.
+
+- name: announce — no tailnet configured (skipping tailnet-enroll)
+  ansible.builtin.debug:
+    msg: >-
+      fleet_tailnet_control_url is not set — skipping tailnet enrolment.
+      Set it to the headscale control URL (mirrors
+      fleet.settings.tailnet.controlUrl) and fleet_tailnet_preauth_url to
+      the preauth-key issuer endpoint (mirrors
+      fleet.settings.tailnet.preauthKeyUrl) to enable.
+  when: fleet_tailnet_control_url is not defined
+
+- name: tailnet enrolment
+  when: fleet_tailnet_control_url is defined
+  block:
+    - name: require fleet_tailnet_preauth_url alongside the control URL
+      ansible.builtin.assert:
+        that:
+          - fleet_tailnet_preauth_url is defined
+        fail_msg: >-
+          fleet_tailnet_control_url is set but fleet_tailnet_preauth_url
+          is not. The base role fetches preauth keys over HTTPS (mirrors
+          fleet.settings.tailnet.preauthKeyUrl); set it, or leave both
+          undefined to disable tailnet enrolment.
+
+    # Tailscale isn't in stock Debian repos; add the official apt source.
+    - name: ensure /etc/apt/keyrings exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: install Tailscale apt signing key
+      ansible.builtin.get_url:
+        url: "https://pkgs.tailscale.com/stable/debian/{{ ansible_distribution_release }}.noarmor.gpg"
+        dest: /etc/apt/keyrings/tailscale-archive-keyring.gpg
+        mode: "0644"
+        force: false
+
+    - name: register Tailscale apt source
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/tailscale.list
+        mode: "0644"
+        content: |
+          deb [signed-by=/etc/apt/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian {{ ansible_distribution_release }} main
+      register: tailscale_apt_source
+
+    - name: refresh apt cache when source changes
+      ansible.builtin.apt:
+        update_cache: true
+      when: tailscale_apt_source.changed
+
+    - name: install tailscale
+      ansible.builtin.apt:
+        name: tailscale
+        state: present
+
+    # LXC guard: tailscaled needs /dev/net/tun. Unprivileged CTs only have
+    # it when the PVE host passes it through (proxmox/pve dev-lxc-tun.yml
+    # + a CT reboot). Soft-skip enrolment with a loud pointer instead of
+    # leaving a silently broken tailscaled behind.
+    - name: check /dev/net/tun availability
+      ansible.builtin.stat:
+        path: /dev/net/tun
+      register: tailnet_tun
+
+    - name: announce — no TUN device (container without passthrough)
+      ansible.builtin.debug:
+        msg: >-
+          /dev/net/tun is missing — tailscaled cannot run here. If this is
+          an LXC, enable passthrough on the PVE host (host vars
+          pve_tun_passthrough_cts + the pve playbook --tags dev-lxc-tun),
+          reboot the CT, then re-run with --tags tailnet-enroll.
+      when: not tailnet_tun.stat.exists
+
+    - name: enable + start tailscaled
+      ansible.builtin.systemd:
+        name: tailscaled
+        state: started
+        enabled: true
+      when: tailnet_tun.stat.exists
+
+    - name: check existing tailscale state
+      ansible.builtin.command: tailscale status --json
+      register: tailscale_status
+      changed_when: false
+      failed_when: false
+      when: tailnet_tun.stat.exists
+
+    - name: parse tailscale state
+      ansible.builtin.set_fact:
+        tailscale_enrolled: >-
+          {{
+            tailnet_tun.stat.exists
+            and tailscale_status.rc | default(1) == 0
+            and (tailscale_status.stdout | from_json).BackendState | default('') == 'Running'
+          }}
+
+    - name: fetch preauth key from the key issuer
+      ansible.builtin.uri:
+        url: "{{ fleet_tailnet_preauth_url }}"
+        method: GET
+        return_content: true
+        # Don't fail on non-200 — hosts that aren't on the issuer's
+        # allowlist may get a default empty page on 200, or a 404. Both
+        # should soft-skip enrol, not break the playbook.
+        status_code: [200, 404]
+        validate_certs: true
+      register: preauth_response
+      when: tailnet_tun.stat.exists and (not tailscale_enrolled or tailnet_force_rekey)
+      no_log: true
+      failed_when: false
+
+    - name: determine whether a real preauth key was returned
+      ansible.builtin.set_fact:
+        has_valid_preauth: >-
+          {{
+            preauth_response is defined
+            and (preauth_response.skipped | default(false)) == false
+            and (preauth_response.content | default('')) is search('^' + fleet_tailnet_key_prefix)
+          }}
+
+    - name: announce — no preauth available for this host (soft skip)
+      ansible.builtin.debug:
+        msg: >-
+          the preauth key issuer has no key for {{ inventory_hostname }}
+          (endpoint returned a non-key body). Skipping tailnet enrol. To
+          add this host, allow it on the issuer side and re-run with
+          --tags tailnet-enroll -e tailnet_force_rekey=true.
+      when:
+        - not tailscale_enrolled
+        - not has_valid_preauth
+
+    # accept-routes / accept-dns are per-host dials. Default true, but a
+    # host that is ALREADY ON an advertised subnet (e.g. a hypervisor
+    # sitting on the fleet LAN that a subnet router advertises) MUST set
+    # `tailnet_accept_routes: false` — otherwise it accepts a route for
+    # its own subnet and blackholes its own host networking (this can
+    # take a PVE node off corosync). Likewise `tailnet_accept_dns: false`
+    # for hosts that must keep the fleet DNS pin (MagicDNS would clobber
+    # /etc/resolv.conf).
+    - name: enrol on tailnet
+      ansible.builtin.command:
+        cmd: >-
+          tailscale up
+          --login-server={{ fleet_tailnet_control_url }}
+          --auth-key={{ preauth_response.content }}
+          --hostname={{ tailnet_hostname | default(inventory_hostname) }}
+          --accept-routes={{ 'true' if (tailnet_accept_routes | default(true)) else 'false' }}
+          --accept-dns={{ 'true' if (tailnet_accept_dns | default(true)) else 'false' }}
+          --reset
+      no_log: true
+      when: has_valid_preauth
+      changed_when: true
+      notify: restart tailscaled

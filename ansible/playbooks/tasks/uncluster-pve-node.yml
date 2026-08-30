@@ -1,0 +1,117 @@
+---
+# Remove a PVE node from the cluster cleanly so it can be redeployed.
+#
+# Two-step removal:
+#   1. `pvecm delnode <name>` on a surviving cluster member — writes to
+#      corosync, the leaving node disappears from quorum.
+#   2. `rm -rf /etc/pve/nodes/<name>` on the cluster FS — without this
+#      the PVE UI keeps showing the dead node with a red exclamation
+#      mark forever. /etc/pve is pmxcfs (synthetic cluster filesystem)
+#      so deleting on one surviving node propagates.
+#
+# Safety:
+#   - Operator must pass `-e pve_node_to_remove=<name>`. No default.
+#   - Refuses to remove the cluster creator (would orphan the cluster).
+#   - Refuses to remove the host we're running this play against
+#     (self-delete isn't allowed by corosync anyway, but bailing early
+#     gives a better error message).
+#   - Idempotent: if the node is already gone from `pvecm nodes`,
+#     skips the delnode step and just cleans the FS leftover.
+#
+# Usage:
+#   fleet ansible run tasks/uncluster-pve-node -e pve_node_to_remove=<name>
+#
+# After this completes, `tofu destroy --target <compute addr>` finishes the
+# teardown. The next `tofu apply` brings the host back fresh and
+# `fleet ansible run pve --limit <name>` re-joins it.
+
+- hosts: "pve:!{{ pve_node_to_remove | default('__sentinel__') }}"
+  gather_facts: false
+  become: true
+  vars:
+    # Operator MUST override via -e. The sentinel string is what the
+    # host filter falls back to when the var is unset, so the play
+    # targets every PVE host (and the first assert kills it cleanly).
+    pve_node_to_remove: ""
+
+  pre_tasks:
+    - name: refuse if pve_node_to_remove is unset
+      ansible.builtin.assert:
+        that:
+          - pve_node_to_remove != ""
+          - pve_node_to_remove is defined
+        fail_msg: >-
+          pve_node_to_remove is required. Re-run with:
+          fleet ansible run tasks/uncluster-pve-node
+          -e pve_node_to_remove=<name>
+      run_once: true
+
+    - name: refuse if pve_cluster_creator is unset
+      ansible.builtin.assert:
+        that:
+          - pve_cluster_creator is defined
+        fail_msg: >-
+          pve_cluster_creator is required (set it in your inventory group
+          vars for the `pve` group) so this play can refuse to remove the
+          cluster creator.
+      run_once: true
+
+    - name: refuse if asked to remove the cluster creator
+      ansible.builtin.assert:
+        that:
+          - pve_node_to_remove != pve_cluster_creator
+        fail_msg: >-
+          Refusing to remove {{ pve_node_to_remove }} — it is the
+          cluster creator (pve_cluster_creator). Removing it would
+          orphan the rest of the cluster. If you really need to retire
+          the creator, designate a new one first and migrate the role.
+      run_once: true
+
+    - name: refuse if asked to remove the host we'd be running pvecm on
+      ansible.builtin.assert:
+        that:
+          - pve_node_to_remove != inventory_hostname
+        fail_msg: >-
+          Refusing self-delete on {{ inventory_hostname }}. corosync
+          won't accept a node deleting itself; the operation has to
+          run on a different surviving cluster member.
+
+  tasks:
+    - name: probe cluster membership
+      ansible.builtin.command: pvecm nodes
+      register: pvecm_nodes
+      changed_when: false
+
+    - name: pvecm delnode (idempotent — skip if already gone)
+      ansible.builtin.command: "pvecm delnode {{ pve_node_to_remove }}"
+      when: pve_node_to_remove in pvecm_nodes.stdout
+      run_once: true
+      changed_when: true
+
+    - name: probe /etc/pve/nodes for stale leftover
+      ansible.builtin.stat:
+        path: "/etc/pve/nodes/{{ pve_node_to_remove }}"
+      register: pve_nodes_dir
+      run_once: true
+
+    - name: clean up /etc/pve/nodes/{{ pve_node_to_remove }} so the UI forgets it
+      ansible.builtin.file:
+        path: "/etc/pve/nodes/{{ pve_node_to_remove }}"
+        state: absent
+      when: pve_nodes_dir.stat.exists | default(false)
+      run_once: true
+
+    - name: confirm node is gone from cluster
+      ansible.builtin.command: pvecm nodes
+      register: pvecm_nodes_after
+      changed_when: false
+      run_once: true
+
+    - name: report
+      ansible.builtin.debug:
+        msg: >-
+          {{ pve_node_to_remove }} removed from cluster. Run
+          `tofu destroy --target <addr>` next to release the VM,
+          then a fresh `tofu apply` + `fleet ansible run pve
+          --limit {{ pve_node_to_remove }}` re-creates and re-joins it.
+      run_once: true

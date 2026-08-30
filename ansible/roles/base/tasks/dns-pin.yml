@@ -1,0 +1,52 @@
+---
+# Pin /etc/resolv.conf to the fleet DNS resolvers. DHCP would otherwise
+# overwrite it with the LAN gateway's DNS, breaking split-horizon
+# resolution for the fleet's internal zones (fleet.settings.domain.*).
+#
+# Soft-skips when fleet_dns_servers is undefined (no fleet DNS to pin).
+
+- name: announce — no fleet DNS configured (skipping dns-pin)
+  ansible.builtin.debug:
+    msg: >-
+      fleet_dns_servers is not set — skipping resolv.conf pin. Set it to
+      the list of fleet DNS resolver IPs (and fleet_dns_search to your
+      search domains) to enable.
+  when: fleet_dns_servers is not defined
+
+- name: render /etc/resolv.conf
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart systemd-resolved
+  when: fleet_dns_servers is defined
+
+# Cloud images may not ship isc-dhcp-client, so the hooks dir is absent
+# — create it; the hook is inert without dhclient and takes effect if
+# it's ever installed.
+- name: ensure dhclient hooks directory exists
+  ansible.builtin.file:
+    path: /etc/dhcp/dhclient-enter-hooks.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: fleet_dns_servers is defined
+
+- name: install dhclient hook so DHCP doesn't overwrite resolv.conf
+  ansible.builtin.template:
+    src: dhclient-keep-resolv-conf.j2
+    dest: /etc/dhcp/dhclient-enter-hooks.d/keep-resolv-conf
+    owner: root
+    group: root
+    mode: "0755"
+  when: fleet_dns_servers is defined
+
+- name: lock /etc/resolv.conf against accidental edits
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    attributes: +i
+  failed_when: false
+  when: fleet_dns_servers is defined

@@ -387,6 +387,25 @@ let
         description = ''Explicit VM image. "file:<file_id>" imports a qcow2; "clone:<vmid>" clones a template.'';
       };
 
+      ansible_playbook = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Override the Ansible playbook the terranix `ansible_playbook`
+          emitter chains to this host after provisioning. By convention
+          the framework playbooks apply (non-NixOS containers →
+          fleetkit's ansible/playbooks/developer.yml, VMs tagged
+          "pve-host" → ansible/playbooks/pve.yml); set this to a path
+          string (absolute, or relative to the tofu working dir
+          .tf/<stack>/) to substitute a consumer playbook instead.
+          Consumer playbooks resolve roles via ANSIBLE_ROLES_PATH, which
+          the fleet CLI points at both the consumer's ansible/roles and
+          the framework tree. Only consulted for hosts the emitter's
+          conventions already match — it does not opt additional hosts
+          into Ansible.
+        '';
+      };
+
       data_disks = lib.mkOption {
         type = lib.types.listOf dataDiskOpts;
         default = [];

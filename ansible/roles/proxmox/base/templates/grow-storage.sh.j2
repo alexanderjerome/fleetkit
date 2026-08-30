@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Rendered by ansible: roles/proxmox/base/tasks/grow-storage.yml.
+# Runs at every boot. No-op until the underlying VDI was actually grown
+# on the hypervisor side. Edit grow_storage_vgs / grow_storage_lvs in
+# your inventory host/group vars — not here.
+#
+# Three-phase logic:
+#   1. growpart every PV-backing partition. Without this, `pvresize`
+#      can't see past the old partition boundary even if the disk grew
+#      — the partition table caps the PV at its old size. Each PV is
+#      walked back to its parent disk + partition number via lsblk.
+#      growpart returns non-zero (with status NOCHANGE) when there's
+#      nothing to grow, which is fine; we mask it.
+#   2. pvresize every PV backing every declared VG so the VG sees the
+#      newly-available capacity. Idempotent; safe to re-run.
+#   3. Walk `grow_storage_lvs` in declared order. Each entry is
+#      { vg, lv, extend } where `extend` is one of:
+#        • a percentage like "+100%FREE" / "+50%VG"  → uses `lvresize -l`
+#        • an absolute size like "+10G" / "20G"      → uses `lvresize -L`
+#      The script sniffs for a `%` to pick the right flag. Order matters:
+#      the first entry that asks for +100%FREE consumes everything left,
+#      so put fixed-size entries (root) BEFORE any +100%FREE entry.
+set -euo pipefail
+
+VGS=( {% for vg in grow_storage_vgs %}"{{ vg }}" {% endfor %})
+
+# ── phase 1: growpart every partition backing a PV in our VG list ──────
+# lsblk -no PKNAME /dev/xvda3 → "xvda"  (parent block device)
+# We extract the partition number off the PV name with bash regex.
+for vg in "${VGS[@]}"; do
+  vgs --noheadings -o vg_name 2>/dev/null | tr -d ' ' | grep -qx "$vg" || continue
+  pvs --noheadings -o pv_name --select "vg_name=$vg" 2>/dev/null | tr -d ' ' | while read -r pv; do
+    [ -n "$pv" ] || continue
+    parent=$(lsblk -no PKNAME "$pv" 2>/dev/null | head -n1)
+    [ -n "$parent" ] || continue
+    partnum=$(echo "$pv" | sed 's:.*[^0-9]\([0-9]\+\)$:\1:')
+    [ -n "$partnum" ] || continue
+    # growpart exits 1 with NOCHANGE message when there's nothing to grow.
+    growpart "/dev/$parent" "$partnum" 2>&1 | grep -vE "NOCHANGE" || true
+  done
+done
+
+# ── phase 2: pvresize every PV in every declared VG ────────────────────
+for vg in "${VGS[@]}"; do
+  vgs --noheadings -o vg_name 2>/dev/null | tr -d ' ' | grep -qx "$vg" || continue
+  pvs --noheadings -o pv_name --select "vg_name=$vg" 2>/dev/null | tr -d ' ' | while read -r pv; do
+    [ -n "$pv" ] || continue
+    pvresize "$pv" || true
+  done
+done
+
+# ── phase 3: grow each LV per the declared policy ──────────────────────
+grow_lv() {
+  local vg="$1" lv="$2" extend="$3" flag
+  vgs --noheadings -o vg_name 2>/dev/null | tr -d ' ' | grep -qx "$vg" || return 0
+  lvs --noheadings -o lv_name --select "vg_name=$vg" 2>/dev/null | tr -d ' ' | grep -qx "$lv" || return 0
+  # `-l` for percentages (+100%FREE), `-L` for absolute sizes (+10G).
+  if [[ "$extend" == *%* ]]; then flag="-l"; else flag="-L"; fi
+  lvresize "$flag" "$extend" -r "$vg/$lv" 2>/dev/null || true
+}
+
+{% for entry in grow_storage_lvs %}
+# {{ entry.vg }}/{{ entry.lv }} → {{ entry.extend }}
+grow_lv "{{ entry.vg }}" "{{ entry.lv }}" "{{ entry.extend }}"
+{% endfor %}

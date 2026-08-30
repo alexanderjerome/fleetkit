@@ -1,0 +1,24 @@
+---
+# Render /etc/network/interfaces.d/<bridge>.cfg for every entry in
+# pve_secondary_nics. Reload happens via ifup, not a full network restart —
+# we never want to drop the SSH session this play is running over.
+
+- name: render secondary NIC bridge fragments
+  ansible.builtin.template:
+    src: vmbr.j2
+    dest: "/etc/network/interfaces.d/{{ item.bridge }}.cfg"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ pve_secondary_nics }}"
+  loop_control:
+    label: "{{ item.bridge }}"
+  register: bridge_render
+
+- name: bring up newly-rendered bridges (no flap on existing ones)
+  ansible.builtin.command: "ifup {{ item.item.bridge }}"
+  loop: "{{ bridge_render.results }}"
+  loop_control:
+    label: "{{ item.item.bridge }}"
+  when: item.changed | default(false)
+  changed_when: true

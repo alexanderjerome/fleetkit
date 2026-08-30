@@ -20,7 +20,7 @@ import time
 import click
 from rich.console import Console
 
-from ._util import find_project_root
+from ._util import find_project_root, fleet_cache_dir
 from .pve_api import get_host as get_pve_host
 
 console = Console()
@@ -28,11 +28,11 @@ console = Console()
 
 def _load_hosts() -> dict:
     root = find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
     if not hosts_file.exists():
         console.print(
-            "[red]ERROR:[/red] .cache/sk/hosts.json not found — run "
-            "`sk inventory generate` first"
+            "[red]ERROR:[/red] .cache/fleet/hosts.json not found — run "
+            "`fleet inventory generate` first"
         )
         sys.exit(1)
     with open(hosts_file) as f:

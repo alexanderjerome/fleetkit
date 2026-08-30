@@ -1,0 +1,106 @@
+---
+# PVE-native ACME (Let's Encrypt) cert for this node, DNS-01 via Cloudflare.
+# Gives pveproxy a browser-trusted cert for the node's public/tailnet
+# hostname so SSO login has a clean cert. Done here (ansible, pvenode/pvesh
+# as root on the host) rather than terraform because PVE gates ACME-account
+# management to root@pam and the terranix provider only has an API token;
+# this also keeps the Cloudflare token out of tfstate (decrypted on the
+# CONTROL host via community.sops, never the age key on the target).
+# Idempotent: account/plugin create skipped if present; cert ordered only
+# when the live pveproxy cert doesn't cover the domain (avoids LE rate
+# limits). PVE's built-in daily timer handles renewal.
+
+- name: require ACME configuration
+  ansible.builtin.assert:
+    that:
+      - fleet_acme_email is defined
+      - pve_acme_cf_token_sops_path is defined
+    fail_msg: >-
+      PVE ACME needs fleet_acme_email (ACME account contact — mirrors
+      fleet.settings.acmeEmail) and pve_acme_cf_token_sops_path (control-
+      host path to the SOPS file holding the Cloudflare API token; the
+      nested key path is pve_acme_cf_token_sops_keys). Set them in your
+      inventory, or unset pve_acme_domains to skip ACME on this node.
+
+- name: load Cloudflare API token from SOPS (control host only)
+  ansible.builtin.set_fact:
+    # Walk pve_acme_cf_token_sops_keys down into the decrypted document
+    # (namespace() because Jinja for-loops don't leak plain `set`s).
+    _pve_acme_cf_token: >-
+      {%- set ns = namespace(node=(lookup('community.sops.sops', pve_acme_cf_token_sops_path) | from_yaml)) -%}
+      {%- for k in pve_acme_cf_token_sops_keys -%}{%- set ns.node = ns.node[k] -%}{%- endfor -%}{{ ns.node }}
+  no_log: true
+
+- name: read existing ACME accounts
+  ansible.builtin.command: pvesh get /cluster/acme/account --output-format json
+  register: _pve_acme_accounts
+  changed_when: false
+  failed_when: false
+
+- name: register ACME account (root@pam-gated; skipped if already present)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    TOS="$(pvesh get /cluster/acme/tos --directory '{{ pve_acme_directory }}')"
+    pvesh create /cluster/acme/account \
+      --name '{{ pve_acme_account }}' \
+      --contact '{{ fleet_acme_email }}' \
+      --directory '{{ pve_acme_directory }}' \
+      --tos_url "$TOS"
+  when: pve_acme_account not in (_pve_acme_accounts.stdout | default(''))
+  changed_when: true
+
+- name: read existing ACME plugins
+  ansible.builtin.command: pvesh get /cluster/acme/plugins --output-format json
+  register: _pve_acme_plugins
+  changed_when: false
+  failed_when: false
+
+- name: create Cloudflare DNS-01 plugin if absent
+  ansible.builtin.command: >-
+    pvesh create /cluster/acme/plugins
+    --id {{ pve_acme_plugin_id }}
+    --type dns
+    --api cf
+    --data {{ ('CF_Token=' + _pve_acme_cf_token) | b64encode }}
+  when: pve_acme_plugin_id not in (_pve_acme_plugins.stdout | default(''))
+  no_log: true
+  changed_when: true
+
+# PVE stores the DNS plugin `data` field base64-encoded (newline-separated
+# key=value pairs). A plain string gets base64-DECODED into garbage, so the
+# token MUST be b64encode'd. Run every time to keep the stored token current.
+- name: ensure Cloudflare DNS-01 plugin token is current
+  ansible.builtin.command: >-
+    pvesh set /cluster/acme/plugins/{{ pve_acme_plugin_id }}
+    --data {{ ('CF_Token=' + _pve_acme_cf_token) | b64encode }}
+  no_log: true
+  changed_when: true
+
+- name: point the node's ACME config at the account + domain (DNS-01 via plugin)
+  ansible.builtin.command: >-
+    pvenode config set
+    --acme account={{ pve_acme_account }}
+    --acmedomain0 {{ pve_acme_domains[0] }},plugin={{ pve_acme_plugin_id }}
+  changed_when: true
+
+- name: check whether the live pveproxy cert already covers the domain
+  ansible.builtin.shell: >-
+    openssl x509 -in /etc/pve/local/pveproxy-ssl.pem -noout -text 2>/dev/null
+    | grep -q '{{ pve_acme_domains[0] }}' && echo covered || echo missing
+  register: _pve_acme_cert_state
+  changed_when: false
+  failed_when: false
+
+- name: order + install the ACME cert (only when not already covering the domain)
+  # pvenode emits non-UTF8 progress chars that break ansible's stdout capture;
+  # sanitize to printable so the module doesn't choke. pipefail keeps pvenode's
+  # exit code through the tr pipe.
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    pvenode acme cert order 2>&1 | tr -cd '[:print:]\n\t'
+  args:
+    executable: /bin/bash
+  register: _pve_acme_order
+  when: "'covered' not in (_pve_acme_cert_state.stdout | default(''))"
+  changed_when: true
+  failed_when: _pve_acme_order.rc != 0

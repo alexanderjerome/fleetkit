@@ -1,0 +1,121 @@
+---
+# Extra data disks → per-disk VG → lvmthin PVE storage.
+#
+# The PVE auto-installer only partitions the root disk. Hosts that carry
+# extra data VDIs declare them in host vars; this task adopts each one:
+#   /dev/xvdX → pvcreate → vgcreate <vg> → lvcreate -T <vg>/data
+#             → pvesm add lvmthin <vg> (storage name = VG name,
+#               scoped to this node)
+#
+# host vars shape:
+#   pve_data_disks:
+#     - { device: /dev/xvdb, vg: workload-a }
+#     - { device: /dev/xvdc, vg: workload-b }
+#
+# Idempotent at every step: PV/VG/thinpool/storage existence is probed
+# before creation. A disk that's already a PV in a DIFFERENT VG aborts
+# loudly rather than being adopted.
+#
+# Ongoing growth after VDI resizes stays the job of grow-storage.sh
+# (proxmox/base role) — declare the matching VGs in grow_storage_vgs.
+
+- name: probe PV state of each data disk
+  ansible.builtin.command: "pvs --noheadings -o vg_name {{ item.device }}"
+  register: pve_dd_pv
+  changed_when: false
+  failed_when: false
+  loop: "{{ pve_data_disks | default([]) }}"
+
+- name: refuse to adopt disks owned by a different VG
+  ansible.builtin.assert:
+    that:
+      - item.rc != 0 or (item.stdout | trim) in ['', item.item.vg]
+    fail_msg: >-
+      {{ item.item.device }} is already a PV in VG '{{ item.stdout | trim }}'
+      — refusing to vgcreate '{{ item.item.vg }}' over it.
+  loop: "{{ pve_dd_pv.results }}"
+  loop_control: { label: "{{ item.item.device }}" }
+
+- name: pvcreate + vgcreate per disk
+  ansible.builtin.shell: |
+    pvcreate {{ item.item.device }}
+    vgcreate {{ item.item.vg }} {{ item.item.device }}
+  when: item.rc != 0
+  loop: "{{ pve_dd_pv.results }}"
+  loop_control: { label: "{{ item.item.device }} → {{ item.item.vg }}" }
+  changed_when: true
+
+- name: probe thin pool per VG
+  ansible.builtin.command: "lvs --noheadings {{ item.vg }}/data"
+  register: pve_dd_thin
+  changed_when: false
+  failed_when: false
+  loop: "{{ pve_data_disks | default([]) }}"
+  loop_control: { label: "{{ item.vg }}" }
+
+- name: create thin pool (95% of VG; rest = metadata + emergency headroom)
+  ansible.builtin.command: "lvcreate -l 95%FREE --type thin-pool --name data {{ item.item.vg }}"
+  when: item.rc != 0
+  loop: "{{ pve_dd_thin.results }}"
+  loop_control: { label: "{{ item.item.vg }}" }
+  changed_when: true
+
+- name: probe PVE storage entries (cluster-wide config)
+  ansible.builtin.command: "grep -q 'lvmthin: {{ item.vg }}$' /etc/pve/storage.cfg"
+  register: pve_dd_storage
+  changed_when: false
+  failed_when: false
+  loop: "{{ pve_data_disks | default([]) }}"
+  loop_control: { label: "{{ item.vg }}" }
+
+- name: register lvmthin storage (scoped to this node)
+  ansible.builtin.command: >-
+    pvesm add lvmthin {{ item.item.vg }}
+    --vgname {{ item.item.vg }} --thinpool data
+    --content rootdir,images
+    --nodes {{ inventory_hostname }}
+  when: item.rc != 0
+  loop: "{{ pve_dd_storage.results }}"
+  loop_control: { label: "{{ item.item.vg }}" }
+  changed_when: true
+
+# ── Fold raw disks into the pve VG itself ───────────────────────
+# For hosts whose CTs all carve from local-lvm (pve/data thin pool)
+# rather than per-workload pools. A deploy-profile install can leave a
+# small thin pool while a large data VDI sits raw — one big copy then
+# fills the pool and forces a CT filesystem into emergency_ro.
+#
+#   pve_vg_extend_disks: [ /dev/xvdb ]
+
+- name: probe PV state of pve-VG extension disks
+  ansible.builtin.command: "pvs --noheadings -o vg_name {{ item }}"
+  register: pve_vgx_pv
+  changed_when: false
+  failed_when: false
+  loop: "{{ pve_vg_extend_disks | default([]) }}"
+
+- name: refuse to fold disks owned by another VG into pve
+  ansible.builtin.assert:
+    that:
+      - item.rc != 0 or (item.stdout | trim) in ['', 'pve']
+    fail_msg: "{{ item.item }} belongs to VG '{{ item.stdout | trim }}' — not folding into pve."
+  loop: "{{ pve_vgx_pv.results }}"
+  loop_control: { label: "{{ item.item }}" }
+
+- name: pvcreate + vgextend pve
+  ansible.builtin.shell: |
+    pvcreate {{ item.item }}
+    vgextend pve {{ item.item }}
+  when: item.rc != 0
+  loop: "{{ pve_vgx_pv.results }}"
+  loop_control: { label: "{{ item.item }}" }
+  changed_when: true
+
+- name: grow pve/data thin pool into the new space
+  ansible.builtin.command: lvextend -l +100%FREE pve/data
+  register: pve_vgx_lvextend
+  when: (pve_vg_extend_disks | default([])) != []
+  changed_when: "'successfully resized' in (pve_vgx_lvextend.stdout + pve_vgx_lvextend.stderr)"
+  failed_when: >-
+    pve_vgx_lvextend.rc != 0
+    and 'matches existing size' not in (pve_vgx_lvextend.stdout + pve_vgx_lvextend.stderr)

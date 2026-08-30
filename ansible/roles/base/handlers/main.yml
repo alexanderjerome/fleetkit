@@ -1,0 +1,20 @@
+---
+- name: update ca trust
+  ansible.builtin.command: update-ca-certificates
+  changed_when: true
+
+- name: restart systemd-resolved
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    state: restarted
+  when: ansible_facts.services['systemd-resolved.service'] is defined
+
+- name: restart chrony
+  ansible.builtin.systemd:
+    name: chrony
+    state: restarted
+
+- name: restart tailscaled
+  ansible.builtin.systemd:
+    name: tailscaled
+    state: restarted

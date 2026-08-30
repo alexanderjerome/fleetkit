@@ -1,0 +1,58 @@
+---
+# Baseline for every Ansible-managed fleet host (Debian-family: PVE/PBS
+# hypervisors, Debian dev guests). Optional feature blocks mirror the
+# nullability of the matching `fleet.settings.*` Nix options — a variable
+# left undefined means "feature off", a required variable is asserted
+# with a clear message. See ansible/README.md for the full variable ↔
+# fleet.settings correspondence table.
+
+# ── REQUIRED (assert-guarded) ────────────────────────────────────────
+# fleet_admin_ssh_keys — list of SSH public key strings authorized on
+# root of every host (operator back door; survives IdP/LDAP outages).
+# ↔ fleet.settings.adminSshKeys (required by the NixOS base layer too).
+# No default: sysadmin-ssh.yml asserts it is defined and non-empty.
+
+# ── OPTIONAL features (undefined ⇒ task soft-skips) ──────────────────
+# fleet_ca_cert_path   — path (on the control host) to the internal CA
+#                        root certificate. ↔ fleet.settings.internalCa.certFile
+# fleet_ca_cert_name   — trust-store filename stem for the CA cert.
+fleet_ca_cert_name: fleet-internal-ca
+
+# fleet_dns_servers   — list of fleet DNS resolver IPs to pin
+#                       /etc/resolv.conf to (e.g. ["192.0.2.100"]).
+#                       Undefined ⇒ dns-pin is skipped. The fleet DNS
+#                       host usually serves the zones declared in
+#                       fleet.settings.domain.{base,internal}.
+# fleet_dns_search    — resolv.conf search domains; conventionally
+#                       [fleet.settings.domain.base, .domain.internal].
+fleet_dns_search: []
+
+# fleet_tailnet_control_url — login/control server URL of the fleet
+#                       tailnet (headscale). ↔ fleet.settings.tailnet.controlUrl.
+#                       Undefined ⇒ tailnet-enroll is skipped entirely.
+# fleet_tailnet_preauth_url — HTTPS endpoint returning a preauth key as
+#                       raw text. ↔ fleet.settings.tailnet.preauthKeyUrl.
+# fleet_tailnet_key_prefix — prefix a real preauth key must carry;
+#                       responses without it (error pages, stubs) soft-skip.
+fleet_tailnet_key_prefix: "hskey-auth-"
+
+# Set to true to ignore an existing tailnet enrolment and force a fresh
+# preauth key. Set per-run via --extra-vars; do not edit here.
+tailnet_force_rekey: false
+
+# Timezone for every host.
+fleet_timezone: UTC
+
+# Baseline apt packages every host gets.
+base_packages:
+  - git
+  - rsync
+  - curl
+  - wget
+  - jq
+  - vim
+  - htop
+  - ca-certificates
+  - gnupg
+  - bash-completion
+  - apt-transport-https

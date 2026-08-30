@@ -1,6 +1,6 @@
 """fleet pve cluster — declarative-ish PVE cluster lifecycle.
 
-Reads the tier-1 PVE hosts from .cache/sk/hosts.json (derived from
+Reads the tier-1 PVE hosts from .cache/fleet/hosts.json (derived from
 fleet.compute) and converges their cluster membership using `pvecm`.
 
 The founder is the entry tagged "founder" (currently `pve-platform`).
@@ -37,7 +37,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ._util import find_project_root
+from ._util import find_project_root, fleet_cache_dir
 
 console = Console()
 
@@ -47,11 +47,11 @@ SSH_CONNECT_TIMEOUT = 10
 
 def _load_hosts() -> dict[str, dict]:
     root = find_project_root()
-    hosts_file = root / ".cache" / "sk" / "hosts.json"
+    hosts_file = fleet_cache_dir(root) / "hosts.json"
     if not hosts_file.exists():
         console.print(
-            "[red]ERROR:[/red] .cache/sk/hosts.json not found — "
-            "run `sk inventory generate` first"
+            "[red]ERROR:[/red] .cache/fleet/hosts.json not found — "
+            "run `fleet inventory generate` first"
         )
         sys.exit(1)
     with open(hosts_file) as f:

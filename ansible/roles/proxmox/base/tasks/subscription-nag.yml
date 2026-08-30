@@ -1,0 +1,25 @@
+---
+# Patch the PVE/PBS GUI to hide the "you have no valid subscription" dialog.
+# Re-applied automatically after every pve-manager / proxmox-backup-server
+# upgrade via an apt post-invoke hook.
+
+- name: detect proxmox flavour
+  ansible.builtin.set_fact:
+    proxmox_nag_target: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+  when: proxmox_suppress_subscription_nag
+
+- name: render apt post-invoke hook (re-applies nag patch after upgrades)
+  ansible.builtin.template:
+    src: apt-no-nag.conf.j2
+    dest: /etc/apt/apt.conf.d/99-no-subscription-nag
+    owner: root
+    group: root
+    mode: "0644"
+  when: proxmox_suppress_subscription_nag
+
+- name: apply nag patch right now (covers first apply on a fresh host)
+  ansible.builtin.shell: |
+    set -e
+    sed -i.bak 's@\.data\.status\.toLowerCase() !== "active"@false@g' "{{ proxmox_nag_target }}" || true
+  changed_when: false
+  when: proxmox_suppress_subscription_nag

@@ -1,0 +1,26 @@
+---
+- import_tasks: user-ssh-keys.yml
+  tags: [developer, user-ssh-keys]
+
+- import_tasks: dev-tools.yml
+  tags: [developer, dev-tools]
+
+- import_tasks: docker.yml
+  tags: [developer, docker]
+
+# data-root on the /data mount — volumes + image layers persist on the
+# big data disk. No-ops (with a notice) when the box has no /data mount.
+- import_tasks: docker-data-root.yml
+  tags: [developer, docker, docker-data-root]
+
+- import_tasks: install-nix.yml
+  tags: [developer, install-nix]
+
+- import_tasks: flake-helpers.yml
+  tags: [developer, flake-helpers]
+
+- import_tasks: shell-config.yml
+  tags: [developer, shell-config]
+
+- import_tasks: sudo-scope.yml
+  tags: [developer, sudo-scope]

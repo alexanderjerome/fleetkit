@@ -1,0 +1,18 @@
+---
+- name: apt update
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 600
+
+- name: apt full-upgrade
+  ansible.builtin.apt:
+    upgrade: full
+    autoremove: true
+    autoclean: true
+
+- name: reinstall proxmox-widget-toolkit so the nag patch reapplies cleanly
+  ansible.builtin.apt:
+    name: proxmox-widget-toolkit
+    state: latest
+  when: proxmox_suppress_subscription_nag
+  failed_when: false

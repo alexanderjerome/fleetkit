@@ -1,0 +1,54 @@
+---
+# Defaults for Debian developer guests (non-NixOS LXCs/VMs).
+
+# NO LDAP/SSSD here. If the fleet IdP went down, directory-only access
+# would lock the developer out of their own workstation. Persistent
+# local-key SSH instead: the fleet operator keys (roles/base
+# sysadmin-ssh.yml) plus each dev's personal key from host vars.
+
+# Determinate Systems Nix installer — pinned version for reproducibility.
+# Bump deliberately; don't track latest.
+developer_nix_installer_version: "0.30.0"
+developer_nix_installer_url: "https://install.determinate.systems/nix"
+
+developer_dev_tools_packages:
+  - tmux
+  - vim
+  - neovim
+  - htop
+  - ripgrep
+  - fd-find
+  - tree
+  # tealdeer is the Rust rewrite of `tldr` and the package name in Debian 13
+  - tealdeer
+  - bat
+  # `eza` (modern `exa` replacement) — apt name on Debian 13 stable
+  - eza
+
+developer_docker_repo_key_url: https://download.docker.com/linux/debian/gpg
+developer_docker_apt_repo: >-
+  deb [arch=amd64
+  signed-by=/etc/apt/keyrings/docker.gpg]
+  https://download.docker.com/linux/debian
+  {distro_release} stable
+developer_docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Per-developer SSH keys — list of objects loaded from host vars:
+#   developer_authorized_users:
+#     - { user: alice, key: "ssh-ed25519 AAAA... alice@laptop" }
+developer_authorized_users: []
+
+# Sudo scope — scaffold for a tag-derived access pattern. List of
+# {ldap_group, resource_tags} entries; resource_tags align with fleet
+# tags in the fleet manifest. Empty ⇒ no fragments are rendered.
+developer_sudo_tag_grants: []
+
+# Docker data-root (docker-data-root.yml) — volumes + image layers on
+# the dev box's data mount. Only applied when its parent dir is a
+# mountpoint.
+developer_docker_data_root: /data/docker

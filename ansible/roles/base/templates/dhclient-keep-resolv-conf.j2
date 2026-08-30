@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rendered by ansible: roles/base/tasks/dns-pin.yml.
+# Stops dhclient from overwriting /etc/resolv.conf — the fleet DNS at
+# {{ fleet_dns_servers | join(',') }} is the only DNS path that resolves
+# split-horizon entries for the fleet's internal zones.
+make_resolv_conf() { : ; }

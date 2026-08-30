@@ -1,0 +1,25 @@
+---
+# Switch from the Enterprise repos (which 401 without a paid subscription)
+# to the no-subscription repos. Mirrors what an answer-file firstBootScript
+# would do during the PVE install.
+
+- name: disable pve-enterprise.list
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/pve-enterprise.list
+    state: absent
+  when: proxmox_use_no_subscription_repos
+
+- name: disable ceph.list (also enterprise-gated)
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/ceph.list
+    state: absent
+  when: proxmox_use_no_subscription_repos
+
+- name: write proxmox no-subscription sources
+  ansible.builtin.template:
+    src: proxmox-no-subscription.sources.j2
+    dest: /etc/apt/sources.list.d/proxmox-no-subscription.sources
+    owner: root
+    group: root
+    mode: "0644"
+  when: proxmox_use_no_subscription_repos
