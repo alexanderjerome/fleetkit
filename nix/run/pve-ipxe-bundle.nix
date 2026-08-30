@@ -1,0 +1,151 @@
+# nix/run/pve-ipxe-bundle.nix — turn a Proxmox VE (or PBS) auto-install ISO
+# into a netboot bundle: extract the kernel + initrd the iPXE loader needs,
+# tar them up, and (optionally) ship the tarball to a host that will serve them.
+#
+# DRAFT (INFRA-25 follow-up / PXE direction). This command ONLY produces a
+# tarball and optionally scp's it. It does NOT touch netcore, DHCP, or any
+# live service — wiring the bundle into a boot path is a separate step.
+#
+# Usage:
+#   nix run .#pve-ipxe-bundle -- --iso ./proxmox-ve_9.1-1.iso --out /root/pve-ipxe.tar.xz
+#   nix run .#pve-ipxe-bundle -- --iso https://enterprise.proxmox.com/iso/proxmox-ve_9.1-1.iso --out /root/pve-ipxe.tar.xz
+#   nix run .#pve-ipxe-bundle -- --iso ./pve.iso --out /root/pve-ipxe.tar.xz --remote root@netcore:/var/lib/netboot/pve
+#
+# Flags:
+#   --iso     <path|url>   Source ISO. http(s):// is downloaded first; anything
+#                          else is treated as a local path.                (required)
+#   --out     <path>       Where to write the .tar.xz bundle, e.g.
+#                          /root/home/pve-ipxe.tar.xz.                      (required)
+#   --files   <a,b,...>    Comma-separated paths INSIDE the ISO to pull out.
+#                          Default: boot/linux26,boot/initrd.img
+#                          (Proxmox installer kernel + initrd.)             (optional)
+#   --remote  <u@host:dir> If set, scp the finished bundle to this target and
+#                          unpack it there. Omit to just leave the tarball
+#                          on the local system (e.g. netcore already has it). (optional)
+#   --answer-url <url>     If set, also drop a sample `boot.ipxe` in the bundle
+#                          that chainloads kernel+initrd with the PVE auto-
+#                          installer pointed at this HTTP answer endpoint.
+#                          Default: (none — no boot.ipxe generated.)        (optional)
+#
+{ pkgs, lib, nixosConfigurations }:
+let
+  runtimeDeps = with pkgs; [
+    coreutils
+    curl
+    libarchive   # bsdtar — extracts ISO9660 directly, no loop mount / no root
+    gnutar
+    xz
+    gzip
+    openssh      # scp
+  ];
+
+  script = pkgs.writeShellScriptBin "pve-ipxe-bundle" ''
+    set -euo pipefail
+    export PATH="${lib.makeBinPath runtimeDeps}:''${PATH:-}"
+
+    ISO=""
+    OUT=""
+    FILES="boot/linux26,boot/initrd.img"
+    REMOTE=""
+    ANSWER_URL=""
+
+    die() { echo "pve-ipxe-bundle: $*" >&2; exit 1; }
+
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --iso)        ISO="$2";        shift 2 ;;
+        --out)        OUT="$2";        shift 2 ;;
+        --files)      FILES="$2";      shift 2 ;;
+        --remote)     REMOTE="$2";     shift 2 ;;
+        --answer-url) ANSWER_URL="$2"; shift 2 ;;
+        -h|--help)
+          echo "usage: pve-ipxe-bundle --iso <path|url> --out <file.tar.xz>"
+          echo "                       [--files a,b,...] [--remote u@host:dir] [--answer-url URL]"
+          exit 0 ;;
+        *) die "unknown arg: $1 (try --help)" ;;
+      esac
+    done
+
+    [[ -n "$ISO" ]] || die "--iso is required"
+    [[ -n "$OUT" ]] || die "--out is required"
+
+    WORK="$(mktemp -d)"
+    trap 'rm -rf "$WORK"' EXIT
+
+    # ── 1. obtain the ISO ────────────────────────────────────────────────
+    case "$ISO" in
+      http://*|https://*)
+        echo "▶ downloading $ISO"
+        curl -fSL --progress-bar -o "$WORK/source.iso" "$ISO"
+        SRC="$WORK/source.iso"
+        ;;
+      *)
+        [[ -f "$ISO" ]] || die "local ISO not found: $ISO"
+        SRC="$ISO"
+        ;;
+    esac
+
+    # ── 2. extract the requested members from the ISO ────────────────────
+    # bsdtar reads ISO9660 directly. We pass each member explicitly so we
+    # only ever pull the kernel/initrd, never the whole multi-GB image.
+    STAGE="$WORK/stage"
+    mkdir -p "$STAGE"
+
+    echo "▶ extracting from ISO: $FILES"
+    IFS=',' read -ra MEMBERS <<< "$FILES"
+    for m in "''${MEMBERS[@]}"; do
+      m="$(echo "$m" | xargs)"            # trim whitespace
+      [[ -n "$m" ]] || continue
+      # -C extracts into STAGE; bsdtar keeps the member's relative path.
+      if ! bsdtar -x -f "$SRC" -C "$STAGE" "$m" 2>/dev/null; then
+        die "member not found in ISO: $m (check --files; PVE uses boot/linux26 + boot/initrd.img)"
+      fi
+      [[ -e "$STAGE/$m" ]] || die "extraction reported success but $m is missing"
+      echo "    + $m ($(du -h "$STAGE/$m" | cut -f1))"
+    done
+
+    # ── 3. (optional) generate a sample boot.ipxe ────────────────────────
+    if [[ -n "$ANSWER_URL" ]]; then
+      # Flatten the basenames so the iPXE script can reference them simply.
+      KERNEL="$(echo "$FILES" | tr ',' '\n' | grep -i 'linux\|vmlinuz\|kernel' | head -n1 | xargs basename || true)"
+      INITRD="$(echo "$FILES" | tr ',' '\n' | grep -i 'initrd\|initramfs' | head -n1 | xargs basename || true)"
+      KERNEL="''${KERNEL:-linux26}"
+      INITRD="''${INITRD:-initrd.img}"
+      cat > "$STAGE/boot.ipxe" <<EOF
+#!ipxe
+# DRAFT sample — generated by pve-ipxe-bundle. Adjust \''${base-url} to wherever
+# netcore actually serves these files, then reference from your DHCP/iPXE chain.
+set base-url http://answers.example.lan/netboot/pve
+kernel \''${base-url}/$KERNEL proxmox-start-auto-installer proxauto-fetch-from=http proxauto-url=$ANSWER_URL
+initrd \''${base-url}/$INITRD
+boot
+EOF
+      echo "    + boot.ipxe (answer-url: $ANSWER_URL)"
+    fi
+
+    # ── 4. tar it up ─────────────────────────────────────────────────────
+    mkdir -p "$(dirname "$OUT")"
+    echo "▶ writing bundle → $OUT"
+    # Strip leading dirs so members land flat (boot/linux26 → linux26) — the
+    # loader serves them from one directory.
+    tar -C "$STAGE" --transform 's|.*/||' -cJf "$OUT" .
+    echo "    $(du -h "$OUT" | cut -f1)  $OUT"
+
+    # ── 5. (optional) ship + unpack on the target host ───────────────────
+    if [[ -n "$REMOTE" ]]; then
+      HOST="''${REMOTE%%:*}"
+      DIR="''${REMOTE#*:}"
+      [[ "$HOST" != "$REMOTE" && -n "$DIR" ]] || die "--remote must be user@host:/target/dir"
+      echo "▶ shipping to $HOST:$DIR"
+      ssh "$HOST" "mkdir -p '$DIR'"
+      scp "$OUT" "$HOST:$DIR/"
+      ssh "$HOST" "tar -C '$DIR' -xJf '$DIR/$(basename "$OUT")' && rm -f '$DIR/$(basename "$OUT")'"
+      echo "    unpacked into $HOST:$DIR"
+    fi
+
+    echo "✔ done"
+  '';
+in
+{
+  pve-ipxe-bundle = script;
+}

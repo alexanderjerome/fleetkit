@@ -1,0 +1,61 @@
+# fleet CLI configuration — the operator-side twin of fleet/settings.nix.
+# Parsed eval-free at CLI startup; see fleet_launcher/config.py for the
+# full schema and defaults.
+
+[fleet]
+name = "example"
+# ops_email = "ops@example.dev"
+
+[domains]
+base = "example.dev"
+internal = "example.lan"
+tailnet_suffix = "hs.example.dev"
+
+[backend]
+bucket = "example-tofu"
+region = "us-east-1"
+
+[sops]
+age_key_file = "~/.ssh/sops-age.key"
+secrets_file = "nix/secrets/secrets.yaml"
+
+[ssh]
+sysadmin_key_file = "~/.ssh/sysadmin-key"
+
+[network]
+# Used by `fleet inventory` to classify discovered IPv4s (and as the
+# default subnet for `fleet inventory scan`). Match fleet.network.*
+# in your Nix manifest.
+internal_cidr = "192.0.2.0/24"
+# lan_cidr = "198.51.100.0/24"     # only if your LAN differs from internal
+
+# [pki]
+# acme-dns update API on your edge host — for `fleet pki acme-dns register`.
+# acme_dns_api_base = "http://192.0.2.100:8081"
+
+# [catalog]
+# Only needed for `fleet catalog ...` (platform_catalog on your app-db host).
+# app_db_ip = "192.0.2.226"
+# rabbitmq_mgmt_url = "http://192.0.2.213:15672"   # or FLEET_RABBITMQ_MGMT_URL env
+
+# [pve.install]
+# Only needed for `fleet deploy pve install` (unattended PVE installs via XOA).
+# serve_host = "192.0.2.50"          # this workstation, as reachable FROM XOA
+# iso_sr_uuid = "00000000-0000-0000-0000-000000000000"
+# iso_sr_name = "NFS ISO Library"
+# main_sr_name = "local-storage"
+# network_name = "Pool-wide network associated with eth0"
+# installer_iso = "proxmox-ve_9.1-1.iso"
+
+# [pve.install.presets.pve-example]
+# mgmt_ip = "192.0.2.152"
+# mgmt_cidr = "192.0.2.152/24"
+# gateway = "192.0.2.1"
+# dns = "192.0.2.1"
+# mac = "bc:24:11:00:99:10"
+# root_password_hashed = "$6$..."
+# root_ssh_keys = ["ssh-ed25519 AAAA..."]
+
+[cli]
+# Consumer command groups: each *.py here exposes COMMANDS = [click cmds].
+extensions_dir = "cli-ext"

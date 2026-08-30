@@ -1,0 +1,233 @@
+{ config, lib, ... }:
+
+# Fleet-member layer — the fleet-aware layer above core.
+#
+# Splits cleanly: ../core/ is "any NixOS host with the right substrate
+# could boot from this", ./ is "fleet member, talks to fleet DNS,
+# trusts fleet CA, ships logs to fleet observability". Bootstrap
+# templates intentionally skip this module — a fresh VM has no
+# business looking for fleet DNS before its first Colmena push.
+#
+# Contents:
+#   * Fleet-aware networking (singleInterface + internal/external IP
+#     options, second-NIC static on vmbr1, fleet DNS, internal domain)
+#   * Internal CA trust
+#   * Builder binary cache substituter wiring
+#   * Alloy telemetry agent enabled
+#   * SOPS scaffold for the github machine-user token + nix
+#     access-tokens.conf
+#   * nixpkgs unfree allow-list
+
+let
+  inherit (lib) mkOption mkIf types;
+
+  hostsLib = import ../../../lib/inventory.nix { hosts = config.fleet.hostsJson; };
+  cache = hostsLib.builderCache;
+
+  sopsLib = import ../../../lib/sops.nix { inherit lib; };
+  p = config.sops.placeholder;
+
+  netCfg = config.infra.networking;
+in
+{
+  # ── Fleet networking options ───────────────────────────────────
+  # These mirror the v1 core.nix schema verbatim so existing host
+  # configs that set `infra.networking.singleInterface = true;` etc.
+  # don't need touching.
+  options.infra.networking = {
+    internalIp = mkOption {
+      type = types.str;
+      default = "";
+      description = ''
+        Static IP for the internal service network (vmbr1). Set
+        automatically from hosts.json by nix/lib/default.nix.
+      '';
+    };
+    internalGateway = mkOption {
+      type = types.str;
+      default = "";
+      description = "Gateway for internal network. Only set on netgate.";
+    };
+    singleInterface = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        When true, host has one NIC. Default placement is eth0 on vmbr1
+        with the static `internalIp` + internal gateway. If `externalIp`
+        is also set (and `internalIp` is empty), eth0 is placed on
+        vmbr0 with the static `externalIp` + LAN gateway instead
+        (vmbr0-only hosts, e.g. a public landing page).
+      '';
+    };
+    externalIp = mkOption {
+      type = types.str;
+      default = "";
+      description = ''
+        LAN-side IPv4 address for vmbr0-only single-NIC hosts.
+        Auto-wired from the fleet's `ip` field by nix/lib/default.nix
+        when `internalIp` is unset. Ignored unless `singleInterface` is
+        true and `internalIp` is empty.
+      '';
+    };
+  };
+
+  config = {
+    # ── Fleet networking implementation ───────────────────────────
+    # DNS: the running link uses fleet DNS (CoreDNS) ONLY —
+    # config.fleet.network.internal_resolvers, NOT dns_servers. A public
+    # resolver must never sit on this link: systemd-resolved's per-link
+    # failover is sticky, so a single fleet-DNS blip flips resolved to the
+    # public server and it never flips back — and when the fleet's public
+    # base domain is a real public zone, the public answer (the WAN IP)
+    # wins for internal names, which many routers can't hairpin from the
+    # LAN. That took ~15 tailnet nodes offline on 2026-06-19 (INFRA-107).
+    # External names are forwarded by fleet DNS; a fleet-DNS outage falls
+    # back (non-stickily) to systemd-resolved's built-in global FallbackDNS
+    # for external names only, then self-heals. Fresh-host bootstrap keeps
+    # its public fallback via dns_servers in the create-time dnsConfig
+    # (nix/lib/tf/proxmox.nix).
+    #
+    # mkForce overrides the core's plain DHCP eth0 with the fleet-aware
+    # branch that picks between vmbr0-only and vmbr1-static.
+    systemd.network.networks."10-eth0" = lib.mkForce (
+      if netCfg.singleInterface && netCfg.externalIp != "" then {
+        # Single-NIC, LAN-only host (vmbr0). Static external IP + LAN
+        # gateway via the LAN router.
+        matchConfig.Name = "eth0";
+        addresses = [{ Address = "${netCfg.externalIp}/24"; }];
+        routes = [{ Gateway = config.fleet.network.lan_gateway; }];
+        # Fleet-DNS-only (no public resolver on this link) — see INFRA-107.
+        networkConfig.DNS = config.fleet.network.internal_resolvers;
+        # Routing domains pinned to this link so systemd-resolved sends
+        # every fleet-served zone at fleet DNS — including public zones the
+        # fleet answers with split-DNS INTERNAL IPs (fleet hosts hit the
+        # internal ingress directly; external clients hit the WAN IP via
+        # public DNS). The split-DNS answer is only correct from fleet DNS,
+        # which is why this link must not carry a public resolver (INFRA-107).
+        networkConfig.Domains = config.fleet.network.search_domains;
+      }
+      else if netCfg.singleInterface then {
+        # Single-NIC, vmbr1-only host. Default route via the `router`
+        # LXC (ADR-021 Phase 1.b). DNS also via router (CoreDNS moved
+        # off netgate, Phase 3.c). Both pulled from fleet.network.* so
+        # a future move only requires editing the manifest.
+        matchConfig.Name = "eth0";
+        addresses = [{ Address = "${netCfg.internalIp}/24"; }];
+        routes = [{ Gateway = config.fleet.network.gateway; }];
+        # Fleet-DNS-only (no public resolver on this link) — see INFRA-107.
+        networkConfig.DNS = config.fleet.network.internal_resolvers;
+        # Routing domains pinned to this link — same split-DNS rationale as
+        # the vmbr0 branch above (INFRA-107).
+        networkConfig.Domains = config.fleet.network.search_domains;
+      }
+      else {
+        # Dual-NIC: eth0 = DHCP on vmbr0 for WAN egress, eth1 (below)
+        # = static on vmbr1 for fleet-internal traffic.
+        matchConfig.Name = "eth0";
+        networkConfig.DHCP = "ipv4";
+        dhcpV4Config = { UseDNS = true; UseHostname = false; };
+      }
+    );
+
+    # ── Bootstrap-artifact mask (INFRA-42 discovery) ──────────────
+    # The launcher's container bootstrap drops a plain
+    # 00-bootstrap-eth0.network (Address+Gateway only, no DNS) so a
+    # fresh CT is reachable before its first colmena deploy. networkd
+    # matches the first file alphabetically, so if that file survives
+    # the first deploy it shadows 10-eth0 above and the host runs
+    # without DNS/search domains (observed on pgweb + grafana,
+    # 2026-06-12). Declaring the same path as a zero-length managed
+    # file replaces the leftover and networkd treats empty configs as
+    # masked — 10-eth0 wins again. No-op on hosts that never had the
+    # artifact.
+    environment.etc."systemd/network/00-bootstrap-eth0.network".text = "";
+    systemd.services.systemd-networkd.restartTriggers = [
+      config.environment.etc."systemd/network/00-bootstrap-eth0.network".source
+    ];
+
+    systemd.network.networks."10-eth1" = mkIf (!netCfg.singleInterface && netCfg.internalIp != "") ({
+      matchConfig.Name = "eth1";
+      addresses = [{ Address = "${netCfg.internalIp}/24"; }];
+      # Fleet-DNS-only on the internal link (no public resolver) — INFRA-107.
+      networkConfig.DNS = config.fleet.network.internal_resolvers;
+      networkConfig.Domains = [ config.fleet.network.dns_domain ];
+    } // lib.optionalAttrs (netCfg.internalGateway != "") {
+      routes = [{ Gateway = netCfg.internalGateway; }];
+    });
+
+    # ── Internal CA trust ─────────────────────────────────────────
+    security.pki.certificateFiles =
+      lib.optional (config.fleet.settings.internalCa.certFile != null)
+        config.fleet.settings.internalCa.certFile;
+
+    # ── Builder binary cache ──────────────────────────────────────
+    # Automatically configured when builder IP + public key are
+    # available. Fleet is the source of truth for all host IPs.
+    # In-fleet caches come from fleet.settings.cache — explicit
+    # parameters, not file-sniffing (the old builderCache helper read a
+    # pub-key file from a repo-relative path and silently disabled the
+    # cache when it moved).
+    nix.settings.substituters = lib.mkAfter ([
+      "https://nix-community.cachix.org"
+    ] ++ config.fleet.settings.cache.substituters);
+    nix.settings.trusted-public-keys = lib.mkAfter ([
+      "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+    ] ++ config.fleet.settings.cache.trustedPublicKeys);
+
+    # ── GitHub machine-user access token (flake input fetches) ────
+    # Opt-in: only fleets whose flake inputs fetch private GitHub repos
+    # need it (fleet.settings.githubAccessTokens).
+    sops.secrets."integrations/github/machine_user_token" =
+      lib.mkIf config.fleet.settings.githubAccessTokens (sopsLib.mkSecret {});
+    sops.templates."nix-access-tokens" = lib.mkIf config.fleet.settings.githubAccessTokens (sopsLib.mkTemplate {
+      content = "access-tokens = github.com=${p."integrations/github/machine_user_token"}";
+      # World-readable: required so non-root build users (e.g.
+      # hydra-queue-runner on the builder host) can fetch from github
+      # via flake inputs. The token is used for github API fetches only;
+      # protected at the host level by SSH access controls (sssd +
+      # platform-admins).
+      mode = "0444";
+    });
+
+    environment.etc."nix/access-tokens.conf" = lib.mkIf config.fleet.settings.githubAccessTokens {
+      source = config.sops.templates."nix-access-tokens".path;
+    };
+
+    nix.extraOptions = ''
+      !include /etc/nix/access-tokens.conf
+    '';
+
+    # ── nixpkgs allow-list ───────────────────────────────────────
+    nixpkgs.config.allowUnfreePredicate = pkg:
+      builtins.elem (lib.getName pkg) [ "consul" "timescaledb" "claude-code" ];
+
+    # ── Telemetry agent ──────────────────────────────────────────
+    infra.alloy.enable = true;
+
+    # ── NTP via fleet chrony server ──────────────────────────────
+    # Every fleet host runs chrony as a CLIENT pointing at
+    # fleet.network.ntp_server. The host acting as the fleet chrony
+    # SERVER overrides this with the public pool + `allow` directive
+    # in its own host config.
+    #
+    # mkDefault lets per-host overrides win without lib.mkForce —
+    # the NTP-server host sets `services.chrony.servers =
+    # [ "pool.ntp.org" ... ]` at standard priority, which beats this
+    # mkDefault.
+    #
+    # Lives in infra rather than core so bootstrap-image templates
+    # don't try to reach the fleet NTP host before they're on the
+    # fleet network; bootstrap install windows are short enough that
+    # NTP drift doesn't matter.
+    #
+    # Unprivileged LXCs can't `adjtimex()` (Operation not permitted)
+    # so chronyd crashloops and the deploy ends in colmena error 4
+    # even when the rest of activation succeeded. The kernel clock
+    # comes from the PVE host, so the LXC doesn't need NTP itself —
+    # leave services.chrony off and rely on the host's chrony.
+    services.chrony = {
+      enable = lib.mkDefault (!config.boot.isContainer);
+      servers = lib.mkDefault [ config.fleet.network.ntp_server ];
+    };
+  };
+}

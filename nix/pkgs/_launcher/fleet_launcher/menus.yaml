@@ -1,0 +1,286 @@
+# fleet TUI menu definition
+# Used by Textual to render the interactive menu tree.
+#
+# Schema:
+#   menus.<key>:
+#     label:       Display name in the menu
+#     description: One-line description shown beside the label
+#     icon:        Textual/Rich icon name (optional)
+#     menus:       Nested sub-menus (recursive)
+#     commands:    Leaf actions — each has label, description, run (shell command)
+#     args:        Prompted arguments (name + prompt text), injected into `run`
+
+menus:
+
+  deploy:
+    label: Deploy
+    description: Multi-step deployment pipelines
+    icon: rocket
+    menus:
+
+      infra:
+        label: Infra Pipeline
+        description: Full 7-stage deploy orchestrator
+        commands:
+          interactive:
+            label: Interactive deploy
+            description: Launch the TUI pipeline (all stages)
+            run: cd infra && python deploy.py
+          stage:
+            label: Run a single stage
+            description: Execute one pipeline stage by name
+            run: cd infra && python deploy.py --stage {stage}
+            args:
+              - name: stage
+                prompt: "Stage (bootstrap|compute|platform|promote|data|services|observability):"
+          status:
+            label: Pipeline status
+            description: Show current pipeline state
+            run: cd infra && python deploy.py --status
+
+      nixos:
+        label: NixOS (Colmena)
+        description: Declarative NixOS configuration deployment
+        commands:
+          apply-all:
+            label: Apply to all hosts
+            description: Deploy NixOS config to every host
+            run: colmena apply --impure
+          apply-host:
+            label: Apply to a host
+            description: Deploy NixOS config to a single host
+            run: colmena apply --impure --on {host}
+            args:
+              - name: host
+                prompt: "Hostname:"
+          apply-remote:
+            label: Apply (build on target)
+            description: Deploy, building on the target host itself
+            run: colmena apply --impure --on {host} --build-on-target
+            args:
+              - name: host
+                prompt: "Hostname:"
+          apply-stack:
+            label: Apply to a stack
+            description: Deploy to all hosts tagged with a stack name
+            run: colmena apply --impure --on @{stack}
+            args:
+              - name: stack
+                prompt: "Stack tag:"
+          build:
+            label: Build only
+            description: Build all host configs locally (no deploy)
+            run: colmena build --impure
+
+      tf:
+        label: Terranix / OpenTofu
+        description: LXC container lifecycle via terranix-emitted tofu stacks
+        commands:
+          list:
+            label: List stacks
+            description: Enumerate all leaf stacks
+            run: fleet deploy tf list
+          preview:
+            label: Stack preview
+            description: Preview changes for a stack (or prefix)
+            run: fleet deploy tf preview {scope}
+            args:
+              - name: scope
+                prompt: "Stack scope (e.g. dev.bitcoin.signet):"
+          apply:
+            label: Stack apply
+            description: Apply a stack (or prefix)
+            run: fleet deploy tf apply {scope} --yes
+            args:
+              - name: scope
+                prompt: "Stack scope (e.g. dev.bitcoin.signet):"
+          destroy:
+            label: Stack destroy
+            description: Destroy a stack (preflight-protected)
+            run: fleet deploy tf destroy {scope} --yes
+            args:
+              - name: scope
+                prompt: "Stack scope:"
+            confirm: true
+
+  inventory:
+    label: Inventory
+    description: Host inventory and network scanning
+    icon: clipboard
+    commands:
+      generate:
+        label: Generate inventory
+        description: Build hosts.json from YAML + live PVE state
+        run: fleet inventory generate
+      generate-offline:
+        label: Generate (offline)
+        description: Build hosts.json from YAML only (no PVE API)
+        run: fleet inventory generate --offline
+      show:
+        label: Show inventory
+        description: Display current host inventory table
+        run: fleet inventory show
+      scan:
+        label: Scan subnet
+        description: Scan for used/available IPs on the network
+        run: fleet inventory scan
+
+  bootstraps:
+    label: Bootstraps
+    description: One-time setup and platform utilities
+    icon: wrench
+    menus:
+
+      hiro:
+        label: Hiro
+        description: Snapshot bootstrapping for Hiro databases
+        commands:
+          discover:
+            label: Discover snapshots
+            description: Query GCS bucket for available snapshots
+            run: fleet hiro discover
+          pipeline:
+            label: Run pipeline (local)
+            description: Full bootstrap pipeline on this machine
+            run: fleet hiro pipeline
+          remote-pipeline:
+            label: Run pipeline (remote)
+            description: Launch bootstrap on a remote host
+            run: fleet hiro remote pipeline
+          remote-status:
+            label: Remote status
+            description: Check remote bootstrap progress
+            run: fleet hiro remote status
+          remote-attach:
+            label: Remote attach
+            description: Reconnect to a remote bootstrap session
+            run: fleet hiro remote attach
+          remote-kill:
+            label: Remote kill
+            description: Kill a remote bootstrap session
+            run: fleet hiro remote kill
+            confirm: true
+
+      komodo:
+        label: Komodo
+        description: Komodo Core server management
+        commands:
+          ensure-api-key:
+            label: Ensure API key
+            description: Ensure a valid Komodo API key exists
+            run: fleet komodo ensure-api-key
+          register-server:
+            label: Register server
+            description: Register a periphery host with Komodo
+            run: fleet komodo register-server
+          server-exists:
+            label: Check server
+            description: Check if a server is already registered
+            run: fleet komodo server-exists
+          export-resources:
+            label: Export resources
+            description: Export all Komodo resources to TOML
+            run: fleet komodo export-resources
+          create-builder:
+            label: Create builder
+            description: Designate a server as a Komodo builder
+            run: fleet komodo create-builder
+
+      pve:
+        label: Proxmox VE
+        description: PVE host management and templates
+        commands:
+          install-nix:
+            label: Install Nix
+            description: Install Determinate Nix on the PVE host
+            run: fleet pve install-nix
+          build-template:
+            label: Build LXC template
+            description: Build NixOS LXC template on PVE host
+            run: fleet pve build-template
+          status:
+            label: Container status
+            description: Show PVE container overview
+            run: fleet pve status
+
+  devtools:
+    label: Dev Tools
+    description: Secrets, local services, and developer utilities
+    icon: tools
+    menus:
+
+      secrets:
+        label: Secrets
+        description: SOPS secrets management and generation
+        commands:
+          list:
+            label: List keys
+            description: List all secret key paths
+            run: fleet secrets list
+          check:
+            label: Check secrets
+            description: Check for placeholder/unset secrets
+            run: fleet secrets check
+          edit:
+            label: Edit secrets
+            description: Edit secrets in terminal editor
+            run: fleet secrets edit
+          decrypt:
+            label: Decrypt
+            description: Decrypt to plaintext for IDE editing
+            run: fleet secrets decrypt
+          encrypt:
+            label: Encrypt
+            description: Re-encrypt plaintext back to SOPS
+            run: fleet secrets encrypt
+          generate:
+            label: Generate secret
+            description: Generate a random secret value
+            run: fleet secrets generate
+          generate-set:
+            label: Generate + set
+            description: Generate and write a secret to a SOPS key
+            run: fleet secrets generate --set {key}
+            args:
+              - name: key
+                prompt: "SOPS key path:"
+          cluster-token:
+            label: Cluster token
+            description: Generate k3s join token for a cluster
+            run: fleet secrets cluster-token {cluster}
+            args:
+              - name: cluster
+                prompt: "Cluster name:"
+          bootstrap-sops:
+            label: Bootstrap SOPS
+            description: Pre-seed SOPS age key on remote hosts
+            run: fleet secrets bootstrap {hosts}
+            args:
+              - name: hosts
+                prompt: "Host(s):"
+
+      submodules:
+        label: Submodules
+        description: Git submodule synchronization
+        commands:
+          sync:
+            label: Sync
+            description: Add enabled submodules, remove disabled ones
+            run: python3 submodules/sync.py sync
+          sync-dry:
+            label: Sync (dry run)
+            description: Preview sync without making changes
+            run: python3 submodules/sync.py sync --dry-run
+          generate:
+            label: Generate repos.toml
+            description: Refresh repos.toml from GitHub API
+            run: python3 submodules/sync.py generate
+
+      utilities:
+        label: Utilities
+        description: Miscellaneous build and schema tools
+        commands:
+          builder-cache-key:
+            label: Builder cache key
+            description: Fetch Nix binary cache public key from builder
+            run: just builder-cache-key

@@ -1,0 +1,16 @@
+[project]
+name = "xo-grafana-exporter"
+version = "0.1.0"
+description = "Prometheus exporter for XCP-ng via the Xen Orchestra REST API"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+xo-grafana-exporter = "xo_grafana_exporter.main:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["xo_grafana_exporter*"]

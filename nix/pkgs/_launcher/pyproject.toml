@@ -1,0 +1,25 @@
+[project]
+name = "fleet-launcher"
+version = "0.3.0"
+description = "fleet — unified TUI/CLI launcher for fleetkit-managed infrastructure"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+    "questionary>=2.0",
+    "pyyaml>=6.0",
+    "proxmoxer>=2.0",
+    "requests>=2.32",
+    "cryptography>=42.0",
+    "infisicalsdk>=1.0",
+]
+
+[project.scripts]
+fleet = "fleet_launcher.main:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["fleet_launcher*"]

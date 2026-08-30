@@ -1,0 +1,542 @@
+"""sk deploy pve install — drive an unattended PVE install.
+
+ADR-025 Phase 1 — URL-fetch workflow (ADR-022 §4 convention):
+
+  1. Build a per-VM answer.iso locally — ISO9660 with volume label
+     `proxmox-ais` containing a single answer.toml at the root.
+  2. Run a short-lived local HTTP server on the operator's workstation
+     hosting the .iso, then drive XOA's `disk.import url=` to fetch
+     it into the NFS ISO Library SR. (No SSH access to XCP-ng dom0;
+     all uploads flow through XOA.)
+  3. Print xo-cli / REST commands to create the test VM with both
+     the stock PVE ISO and the answer.iso attached as CD-ROMs, set
+     boot order, and start.
+  4. Poll the PVE API at https://<mgmt_ip>:8006 until it answers.
+
+The PVE installer scans attached block devices for a filesystem
+labeled `proxmox-ais`, reads its answer.toml, and runs unattended.
+ISO9660 supports volume labels, so a CD-ROM-attached .iso works
+the same as a labeled partition.
+
+Schema: https://pve.proxmox.com/wiki/Automated_Installation
+"""
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import click
+from rich.console import Console
+
+console = Console()
+
+
+DEFAULT_SERVE_PORT = 8443
+
+
+# ── fleet.toml surface ([pve.install]) ───────────────────────────
+#
+# Site-specific values with no sane universal default. Example:
+#
+#     [pve.install]
+#     serve_host = "192.0.2.50"        # workstation IP XOA can reach
+#     iso_sr_uuid = "00000000-0000-0000-0000-000000000000"
+#     iso_sr_name = "NFS ISO Library"
+#     main_sr_name = "local-storage"
+#     network_name = "Pool-wide network associated with eth0"
+#     # installer_iso = "proxmox-ve_9.1-1.iso"   # optional override
+
+
+def _cfg_installer_iso() -> str:
+    """Stock PVE installer ISO name (already in the ISO SR)."""
+    from .config import get
+    return get("pve.install.installer_iso", "proxmox-ve_9.1-1.iso")
+
+
+def _cfg_iso_sr_uuid() -> str:
+    from .config import require
+    return require("pve.install.iso_sr_uuid",
+                   "UUID of the XOA SR that holds installer/answer ISOs.")
+
+
+def _cfg_iso_sr_name() -> str:
+    from .config import require
+    return require("pve.install.iso_sr_name",
+                   "Name label of the XOA SR that holds installer/answer ISOs.")
+
+
+def _cfg_main_sr_name() -> str:
+    from .config import require
+    return require("pve.install.main_sr_name",
+                   "Name label of the XOA SR that holds VM root disks.")
+
+
+def _cfg_serve_host() -> str:
+    """Workstation address XOA can reach to pull the answer.iso."""
+    from .config import require
+    return require("pve.install.serve_host",
+                   "IP/hostname of this workstation as reachable FROM XOA "
+                   "(or pass --serve-host).")
+
+
+# ── Host configuration ────────────────────────────────────────────
+
+
+@dataclass
+class HostCfg:
+    """Per-host PVE install config."""
+
+    hostname: str
+    role: str  # "founder" | "joiner" — informational; cluster setup is manual post-install for now
+    mgmt_ip: str
+    mgmt_cidr: str
+    gateway: str
+    dns: str
+    mac: str
+    root_password_hashed: str
+    root_ssh_keys: list[str]
+    fqdn: str = ""
+    cpu_cores: int = 2
+    memory_mb: int = 4096
+    disk_gb: int = 32
+    # PVE installer target disk. XCP-ng / Xen guests expose virtual
+    # disks as /dev/xvda (xen_blkfront); bare-metal + PVE / QEMU guests
+    # use /dev/sda or /dev/nvme0n1. The answer.toml's `disk-list`
+    # must match what the kernel actually sees during install — wrong
+    # device = "disk in 'disk-selection' not found" + auto-install
+    # aborts. Default to xvda since every host we install on today is
+    # an XCP-ng VM; override for bare-metal.
+    install_disk: str = "xvda"
+    network_name: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.fqdn:
+            from .config import internal_domain
+            self.fqdn = f"{self.hostname}.{internal_domain()}"
+        if not self.network_name:
+            from .config import require
+            self.network_name = require(
+                "pve.install.network_name",
+                "XOA network name_label for the install NIC "
+                "(or set network_name on the preset).",
+            )
+
+
+# ── Answer renderer ───────────────────────────────────────────────
+
+
+def render_answer(host: HostCfg) -> str:
+    """Build answer.toml body.
+
+    Schema: https://pve.proxmox.com/wiki/Automated_Installation
+    Field names are kebab-case. NIC matched by udev-resolved name
+    derived from the pinned MAC.
+    """
+    keys = ", ".join(f'"{k}"' for k in host.root_ssh_keys)
+    enx_name = "enx" + host.mac.lower().replace(":", "")
+    from .config import ops_email
+    mailto = ops_email()
+    return f"""# Generated by sk deploy pve install for {host.hostname}
+# Schema: https://pve.proxmox.com/wiki/Automated_Installation
+
+[global]
+keyboard             = "en-us"
+country              = "us"
+fqdn                 = "{host.fqdn}"
+mailto               = "{mailto}"
+timezone             = "UTC"
+root-password-hashed = "{host.root_password_hashed}"
+root-ssh-keys        = [ {keys} ]
+reboot-on-error      = false
+
+[network]
+source                 = "from-answer"
+cidr                   = "{host.mgmt_cidr}"
+dns                    = "{host.dns}"
+gateway                = "{host.gateway}"
+filter.ID_NET_NAME_MAC = "{enx_name}"
+
+[disk-setup]
+filesystem = "ext4"
+disk-list  = ["{host.install_disk}"]
+"""
+
+
+# ── Answer ISO builder ────────────────────────────────────────────
+
+
+def build_answer_iso(host: HostCfg, out_dir: Path) -> Path:
+    """Build answer.iso — ISO9660 with volume label `proxmox-ais`.
+
+    The PVE auto-installer scans block devices for a filesystem with
+    that label. ISO9660 supports volume labels, so a CD-ROM-attached
+    .iso works the same as a labeled partition.
+
+    Uses `genisoimage` (system tool) — no root or FUSE required.
+    Populates the ISO from a staging directory.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = out_dir / f"answer-staging-{host.hostname}"
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / "answer.toml").write_text(render_answer(host))
+
+    iso_path = out_dir / f"answer-{host.hostname}.iso"
+    cmd = [
+        "genisoimage",
+        "-quiet",
+        "-V", "proxmox-ais",
+        "-allow-lowercase",
+        "-o", str(iso_path),
+        str(staging),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        console.print("[red]genisoimage failed:[/red]")
+        console.print(result.stderr)
+        sys.exit(1)
+    return iso_path
+
+
+# ── HTTP server for XOA's URL-import ──────────────────────────────
+
+
+class _AnswerIsoHandler(BaseHTTPRequestHandler):
+    """Serves the per-VM answer.iso to XOA during disk.import.
+
+    Single-purpose: GET /<filename> returns the file. Lifetime is
+    seconds (XOA pulls once). Logs requests through rich so the
+    operator sees XOA's GET arrive.
+    """
+    serve_dir: Path = Path(".")
+
+    def log_message(self, fmt: str, *args) -> None:  # noqa: ANN001
+        console.print(f"[dim]http[/dim] {self.address_string()} — " + fmt % args)
+
+    def do_GET(self) -> None:  # noqa: N802
+        rel = self.path.lstrip("/")
+        if not rel or "/" in rel or rel.startswith("."):
+            self.send_error(404)
+            return
+        target = self.serve_dir / rel
+        if not target.is_file():
+            self.send_error(404)
+            return
+        size = target.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with target.open("rb") as fh:
+            shutil.copyfileobj(fh, self.wfile)
+
+
+# ── PVE API health check ──────────────────────────────────────────
+
+
+def _pve_api_up(host: HostCfg, timeout: float = 5.0) -> bool:
+    """Return True when https://<mgmt_ip>:8006 responds.
+
+    PVE returns 401 when unauthenticated; treat that as "API up"
+    since the daemon is listening.
+    """
+    import ssl
+
+    ctx = ssl._create_unverified_context()
+    url = f"https://{host.mgmt_ip}:8006/"
+    try:
+        with urllib.request.urlopen(url, context=ctx, timeout=timeout) as resp:
+            return resp.status in (200, 302, 401)
+    except urllib.error.HTTPError as exc:
+        return exc.code in (200, 302, 401)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+# ── Test-cycle host configs ───────────────────────────────────────
+
+
+def _preset_hosts() -> dict[str, HostCfg]:
+    """PVE install presets from fleet.toml.
+
+    Consumer data lives in the consumer repo:
+
+        [pve.install.presets.pve-platform]
+        mgmt_ip = "192.0.2.152"
+        mgmt_cidr = "192.0.2.152/24"
+        gateway = "192.0.2.1"
+        dns = "192.0.2.1"
+        mac = "bc:24:11:00:99:10"
+        root_password_hashed = "$6$..."
+        root_ssh_keys = ["ssh-ed25519 ..."]
+        cpu_cores = 12
+        memory_mb = 16384
+        disk_gb = 32
+
+    fqdn defaults to <name>.<domains.internal>; role defaults to
+    "founder"; install_disk defaults to xvda (XCP-ng guests);
+    network_name defaults to [pve.install].network_name.
+    """
+    from .config import get
+    out: dict[str, HostCfg] = {}
+    for name, t in (get("pve.install.presets", {}) or {}).items():
+        out[name] = HostCfg(
+            hostname=t.get("hostname", name),
+            role=t.get("role", "founder"),
+            mgmt_ip=t["mgmt_ip"],
+            mgmt_cidr=t["mgmt_cidr"],
+            gateway=t["gateway"],
+            dns=t["dns"],
+            mac=t["mac"],
+            root_password_hashed=t["root_password_hashed"],
+            root_ssh_keys=list(t.get("root_ssh_keys", [])),
+            fqdn=t.get("fqdn", ""),
+            cpu_cores=int(t.get("cpu_cores", 2)),
+            memory_mb=int(t.get("memory_mb", 4096)),
+            disk_gb=int(t.get("disk_gb", 32)),
+            install_disk=t.get("install_disk", "xvda"),
+            network_name=t.get("network_name", ""),
+        )
+    return out
+
+
+# Back-compat name used by the command bodies.
+_test_hosts = _preset_hosts
+
+
+@click.group("pve")
+def pve():
+    """PVE host provisioning (ADR-025 Phase 1).
+
+    Drives unattended PVE installs via partition-mode answer ISOs.
+    Workstation hosts the .iso over short-lived HTTP; XOA pulls it
+    into the ISO SR via disk.import url=. Host presets come from
+    fleet.toml ([pve.install.presets.<name>]).
+    """
+
+
+@pve.command("install")
+@click.argument("host", required=True)
+@click.option(
+    "--out-dir",
+    default="/tmp/sk-pve-install",
+    show_default=True,
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Where to write the per-VM answer.toml + answer.iso locally.",
+)
+@click.option(
+    "--serve/--no-serve",
+    default=True,
+    show_default=True,
+    help="Run a local HTTP server so XOA can pull the answer.iso via URL. "
+         "Disable if you'll pre-stage the file some other way.",
+)
+@click.option(
+    "--serve-host",
+    default=None,
+    help="Address XOA should hit to pull the answer.iso. Defaults to "
+         "[pve.install].serve_host in fleet.toml. Override on remote "
+         "workstations.",
+)
+@click.option(
+    "--serve-bind",
+    default="0.0.0.0",
+    show_default=True,
+    help="Bind address for the local HTTP server.",
+)
+@click.option(
+    "--serve-port",
+    default=DEFAULT_SERVE_PORT,
+    show_default=True,
+    type=int,
+)
+@click.option(
+    "--wait-api/--no-wait-api",
+    default=True,
+    show_default=True,
+    help="After printing the VM-create commands, poll PVE API until up.",
+)
+@click.option(
+    "--timeout",
+    default=2400,
+    show_default=True,
+    type=int,
+    help="Overall wait timeout (seconds) before giving up on the API.",
+)
+def install(
+    host: str,
+    out_dir: str,
+    serve: bool,
+    serve_host: str | None,
+    serve_bind: str,
+    serve_port: int,
+    wait_api: bool,
+    timeout: int,
+) -> None:
+    """Build answer.iso for HOST, serve it locally, print XOA-side steps.
+
+    \b
+    Flow:
+      1. Render answer.toml for HOST from inline config
+      2. Build /tmp/sk-pve-install/answer-HOST.iso (ISO9660, label
+         `proxmox-ais`, containing answer.toml at root)
+      3. (if --serve) Start local HTTP server at --serve-bind:--serve-port
+         hosting the .iso
+      4. Print the xo-cli / REST commands the operator runs to:
+           - disk.import the answer.iso from http://<serve-host>:<port>/
+             into NFS ISO Library SR
+           - sr.scan so the new VDI shows up
+           - vm.create with stock PVE ISO + answer.iso both attached
+             as CD-ROMs, boot order disk-network-cd (c→n→d), start.
+             Boot order: empty disk falls through to PXE (no-op), then
+             to CD which boots the installer. Post-install the disk is
+             bootable and `c` matches first → boots PVE. Keeping `n`
+             and `d` in the chain (rather than dropping them as the
+             old `order=dc` did) gives recovery paths without
+             re-triggering the installer.
+      5. (if --wait-api) Poll https://<mgmt_ip>:8006 until reachable
+
+    The HTTP server stays up across the wait — XOA pulls the .iso
+    once at disk.import time (seconds), then it can shut down. We
+    keep it alive until the API check completes so a retry of the
+    import works without re-running the command.
+    """
+    hosts = _test_hosts()
+    if host not in hosts:
+        console.print(f"[red]unknown host:[/red] {host}")
+        console.print(f"known hosts: {', '.join(sorted(hosts))}")
+        sys.exit(2)
+
+    serve_host = serve_host or _cfg_serve_host()
+    iso_sr_uuid = _cfg_iso_sr_uuid()
+    iso_sr_name = _cfg_iso_sr_name()
+    main_sr_name = _cfg_main_sr_name()
+    pve_iso_name = _cfg_installer_iso()
+
+    target = hosts[host]
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    iso_filename = f"answer-{target.hostname}.iso"
+
+    console.print(f"[bold]sk deploy pve install {host}[/bold]")
+    console.print(f"  role         = {target.role}")
+    console.print(f"  mgmt_ip      = {target.mgmt_ip}")
+    console.print(f"  mac          = {target.mac}  (→ enx{target.mac.replace(':', '')})")
+    console.print(f"  cpu / mem    = {target.cpu_cores}c / {target.memory_mb} MiB")
+    console.print(f"  root disk    = {target.disk_gb} GiB on {main_sr_name}")
+    console.print(f"  network      = {target.network_name}")
+    console.print(f"  ISO SR       = {iso_sr_name} ({iso_sr_uuid})")
+    console.print("")
+
+    # 1+2. Build answer.iso.
+    console.print("[dim]building answer.iso…[/dim]")
+    iso_path = build_answer_iso(target, out_path)
+    iso_size = iso_path.stat().st_size
+    console.print(f"[green]✓[/green] built {iso_path}  ({iso_size:,} bytes)")
+
+    # 3. Start the local HTTP server.
+    httpd: ThreadingHTTPServer | None = None
+    server_thread: threading.Thread | None = None
+    if serve:
+        _AnswerIsoHandler.serve_dir = out_path
+        httpd = ThreadingHTTPServer((serve_bind, serve_port), _AnswerIsoHandler)
+        server_thread = threading.Thread(
+            target=httpd.serve_forever, name="pve-answer-server", daemon=True,
+        )
+        server_thread.start()
+        console.print(
+            f"[green]✓[/green] serving {out_path} on http://{serve_bind}:{serve_port}/  "
+            f"(XOA reaches via http://{serve_host}:{serve_port}/)"
+        )
+
+    iso_url = f"http://{serve_host}:{serve_port}/{iso_filename}"
+
+    # 4. Print the XOA-side commands.
+    console.print("")
+    console.print("[bold]Operator steps (run from a shell with xo-cli authenticated):[/bold]")
+    console.print("")
+    console.print("[bold]a. Import the answer.iso from the workstation HTTP server into NFS ISO Library[/bold]")
+    console.print(f"   xo-cli disk.import sr={iso_sr_uuid} \\")
+    console.print(f"     name={iso_filename} type=iso url={iso_url}")
+    console.print("")
+    console.print("[bold]b. Resolve UUIDs[/bold]")
+    console.print(f"   ANSWER_VDI=$(xo-cli list-objects type=VDI | jq -r '.[] | select(.name_label == \"{iso_filename}\") | .uuid')")
+    console.print(f"   PVE_VDI=$(xo-cli list-objects type=VDI | jq -r '.[] | select(.name_label == \"{pve_iso_name}\") | .uuid')")
+    console.print(f"   NETWORK=$(xo-cli list-objects type=network | jq -r '.[] | select(.name_label == \"{target.network_name}\") | .uuid')")
+    console.print(f"   MAIN_SR=$(xo-cli list-objects type=SR | jq -r '.[] | select(.name_label == \"{main_sr_name}\") | .uuid')")
+    console.print(f"   TEMPLATE=$(xo-cli list-objects type=VM-template | jq -r '.[] | select(.name_label == \"Other install media\") | .uuid')")
+    console.print("")
+    console.print("[bold]c. Create VM with stock PVE ISO + answer.iso both attached as CD-ROMs[/bold]")
+    console.print(f"   VM=$(xo-cli vm.create \\")
+    console.print(f"       name_label={host} \\")
+    console.print(f"       template=$TEMPLATE \\")
+    console.print(f"       bootAfterCreate=false \\")
+    console.print(f"       CPUs={target.cpu_cores} \\")
+    console.print(f"       memory={target.memory_mb * 1024 * 1024} \\")
+    console.print(f"       VIFs=json:'[{{\"network\":\"'$NETWORK'\",\"mac\":\"{target.mac}\"}}]' \\")
+    console.print(f"       existingDisks=json:'{{}}')")
+    console.print(f"   xo-cli vm.createDisk vm=$VM sr=$MAIN_SR name=root size={target.disk_gb}GiB")
+    console.print(f"   xo-cli vm.insertCd vm=$VM cd_id=$PVE_VDI force=true")
+    console.print(f"   xo-cli vm.attachDisk vm=$VM vdi=$ANSWER_VDI mode=RO type=cdrom")
+    # Boot order cnd = the fleet-wide "persistent" boot profile
+    # (INFRA-39, enforced declaratively for terranix-managed VMs via
+    # mkBootOrderFix in nix/lib/tf/xen-orchestra.nix). Disk first
+    # means post-install reboots come up on the installed PVE without
+    # going back into the installer; the empty-disk install case falls
+    # through `c` → `n` (iPXE takes over when one is serving) → `d`
+    # (boots installer). Keeping all three in the chain leaves
+    # recovery paths intact — the historical `order=cdn` default
+    # loops because of how qemu BIOS interacts with the answer-disk
+    # CD; `cnd` puts disk unambiguously first.
+    console.print(f"   xo-cli vm.setBootOrder vm=$VM order=cnd")
+    console.print(f"   xo-cli vm.start id=$VM")
+    console.print("")
+
+    # 5. Optionally wait for the API. Keep the HTTP server up across
+    # this so the operator can retry disk.import if XOA wasn't ready
+    # without re-running the command.
+    if wait_api:
+        console.print(f"[dim]Polling https://{target.mgmt_ip}:8006 — Ctrl-C to stop early …[/dim]")
+        start = time.monotonic()
+        try:
+            while not _pve_api_up(target):
+                if time.monotonic() - start > timeout:
+                    console.print(
+                        f"[yellow]Timeout waiting for PVE API after {timeout}s.[/yellow]"
+                    )
+                    break
+                time.sleep(10)
+            else:
+                elapsed = int(time.monotonic() - start)
+                console.print(
+                    f"[green]✓[/green] PVE API up at https://{target.mgmt_ip}:8006 "
+                    f"(after {elapsed}s)"
+                )
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Wait interrupted.[/yellow]")
+        finally:
+            if httpd is not None:
+                httpd.shutdown()
+                if server_thread is not None:
+                    server_thread.join(timeout=5)
+                console.print("[dim]answer-server stopped.[/dim]")
+
+    console.print("[bold green]done[/bold green]")
+
+
+@pve.command("render-answer")
+@click.argument("host", required=True)
+def render_answer_cmd(host: str) -> None:
+    """Print rendered answer.toml for HOST to stdout (for inspection)."""
+    hosts = _test_hosts()
+    if host not in hosts:
+        console.print(f"[red]unknown host:[/red] {host}")
+        sys.exit(2)
+    click.echo(render_answer(hosts[host]))

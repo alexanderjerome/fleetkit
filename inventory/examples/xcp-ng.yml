@@ -1,0 +1,296 @@
+# inventory/examples/xcp-ng.yml — INFRA-31
+#
+# Target shape for the modular inventory, modeled on the REAL Xen Orchestra API
+# object model as returned by xo-cli. Field names and object structure match a
+# live capture; all addresses, uuids, and names below are DOCUMENTATION VALUES
+# (RFC 5737 addressing, example host names) — nothing structural invented
+# except the `fleet:` extension blocks and the nested `proxmox:` layer (which
+# comes from the PVE API / fleet manifest, not XO).
+#
+# Source commands (xo-cli, authenticated via ~/.config/xo-cli/config.json):
+#   xo-cli list-objects                      # ALL objects, every type
+#   xo-cli list-objects type=pool
+#   xo-cli list-objects type=host
+#   xo-cli list-objects type=network         # + type=PIF for host NICs
+#   xo-cli list-objects type=SR
+#   xo-cli list-objects type=VM              # + type=VBD / VDI / VIF for attachments
+#
+# Conventions:
+#   - Field names match the XO API verbatim (name_label, power_state, $pool,
+#     $SR, $network, SR_type, physical_usage, ...) so the generator can map 1:1.
+#   - `$`-prefixed fields are XO's back-references (uuid links between objects).
+#     We keep them as the join keys instead of inventing our own ref scheme.
+#   - Sizes/memory are BYTES (as the API returns them). Pretty-printing is a
+#     consumer concern, not an inventory concern.
+#   - `fleet:` blocks are the fleet's annotation layer (fleet env/stack/role,
+#     services+ports from the infra.services registry). Everything else is
+#     verbatim hypervisor truth.
+#   - A VM tagged `pve-host` is a nested hypervisor: it carries a `proxmox:`
+#     block whose `guests:` are modeled on the PVE cluster-resources API
+#     (vmid, type, status, maxcpu, maxmem, maxdisk, node, tags).
+
+meta:
+  version: 1
+  generated: "2026-06-11T00:00:00Z"
+  sources:
+    - xo-cli list-objects                          # tier-0 truth (XCP-ng via XOA)
+    - pvesh get /cluster/resources                 # tier-1 truth (PVE cluster)  [planned]
+    - nix/fleet                                    # declared intent (manifest)
+    - infra.services registry                      # services + ports per guest
+
+# ─── XO: pools ──────────────────────────────────────────────────────────────
+# A pool groups hosts; this example is single-host, but multi-host pools are
+# the growth path so the hierarchy is pool → host → VM, not host → VM.
+pools:
+  - id: fe435ebc-e2c5-b9e5-83f4-7ddd5fbf3683
+    name_label: example-server-1
+    master: 2f26fd50-de78-4249-bc9e-0741367f8b50    # host uuid
+    default_SR: d5e8f9d6-585a-8f78-3147-affbae0caec0
+    HA_enabled: false
+    platform_version: "3.4.0"
+    cpus: { cores: 72, sockets: 2 }
+
+# ─── XO: hosts (the physical XCP-ng hypervisors) ────────────────────────────
+hosts:
+  - id: 2f26fd50-de78-4249-bc9e-0741367f8b50
+    $pool: fe435ebc-e2c5-b9e5-83f4-7ddd5fbf3683
+    name_label: example-server-1
+    address: 192.0.2.127                           # management PIF IP
+    productBrand: XCP-ng
+    version: "8.3.0"
+    power_state: Running
+    enabled: true
+    rebootRequired: false
+    startTime: 1779824539                          # unix epoch
+    cpus: { cores: 72, sockets: 2 }
+    CPUs:                                          # XO exposes both; keep the detail
+      modelname: "Intel(R) Xeon(R) Gold 6254 CPU @ 3.10GHz"
+      speed: "3092.734"                            # MHz
+    memory:
+      size: 377957122048                           # 352 GiB physical
+      usage: 142163738624                          # live usage at capture time
+    bios_strings:
+      system-manufacturer: Dell Inc.
+      system-product-name: VxFlex appliance R640 S
+    residentVms: 21                                # count; full uuid list available
+
+# ─── XO: networks + PIFs (host-side resources) ──────────────────────────────
+# networks are pool-wide bridges; PIFs are the host's physical NICs attached to
+# them. VLANs are NOT a list on the network — a tagged VLAN shows up as an
+# additional PIF with vlan: <tag> on its own network object. Untagged = -1.
+networks:
+  - id: 73da78ee-0c16-c4a3-8046-f614c3682217
+    name_label: Pool-wide network associated with eth2
+    bridge: xenbr2
+    MTU: 1500
+    fleet: { alias: lab-lan, cidr: 192.0.2.0/24 }      # the fleet's naming overlay
+  - id: b5ed91ed-030c-6a6f-b5c5-2508c7ad4af3
+    name_label: Pool-wide network associated with eth3
+    bridge: xenbr3
+    MTU: 1500
+    fleet: { alias: fleet-lan, cidr: 198.51.100.0/24 }
+  # ... 3 more: xenbr0 (eth0), xenbr1 (eth1), xenapi (host-internal)
+
+PIFs:
+  - id: 9406bc97-7188-af22-5533-cff873558bcd
+    $host: 2f26fd50-de78-4249-bc9e-0741367f8b50
+    $network: 73da78ee-0c16-c4a3-8046-f614c3682217
+    device: eth2
+    mac: 0c:42:a1:b6:25:4e
+    ip: 192.0.2.127
+    netmask: 255.255.255.0
+    gateway: 192.0.2.1
+    dns: 192.0.2.1
+    vlan: -1
+    management: true                               # this is the mgmt interface
+    attached: true
+    speed: 1000                                    # Mbit/s
+  - id: 27fe58e7-dc6e-178f-bb46-e929bc1ae996
+    $host: 2f26fd50-de78-4249-bc9e-0741367f8b50
+    $network: b5ed91ed-030c-6a6f-b5c5-2508c7ad4af3
+    device: eth3
+    mac: 0c:42:a1:b6:25:4f
+    ip: ""                                         # L2-only uplink (fleet LAN)
+    vlan: -1
+    management: false
+    attached: true
+    speed: 1000
+  # ... eth0 / eth1 (additional lab subnets)
+
+# ─── XO: SRs (storage repositories, host-side resources) ────────────────────
+SRs:
+  - id: d5e8f9d6-585a-8f78-3147-affbae0caec0
+    $pool: fe435ebc-e2c5-b9e5-83f4-7ddd5fbf3683
+    name_label: big_space
+    SR_type: lvm
+    content_type: user
+    shared: false
+    size: 11520297664512                           # 10.5 TiB
+    usage: 9151126175744                           # allocated to VDIs
+    physical_usage: 8882000756736                  # actually written
+  - id: 17ff8806-c51e-8626-d9f8-812db76519ca
+    $pool: fe435ebc-e2c5-b9e5-83f4-7ddd5fbf3683
+    name_label: Local storage
+    SR_type: ext
+    content_type: user
+    shared: false
+    size: 5668351295488
+    usage: 4490153426944
+    physical_usage: 1139785527296
+  # ... 4 more: NFS ISO Library (iso), XCP-ng Tools (iso), DVD drives, Removable storage
+
+# ─── XO: VMs (guests of the XCP-ng host) ────────────────────────────────────
+# Each VM carries its disk attachments (VBDs→VDI→$SR) and NICs (VIFs→$network)
+# inline, so guest→resource mapping reads top-down without chasing four object
+# types. 24 VMs total on this host; three representative ones shown.
+VMs:
+
+  # ---- plain workload VM, multi-disk, dual-NIC ----
+  - id: 30ef2ead-e75a-af00-cb5e-3173c981ecaf
+    $container: 2f26fd50-de78-4249-bc9e-0741367f8b50   # host uuid (XO: "container")
+    $pool: fe435ebc-e2c5-b9e5-83f4-7ddd5fbf3683
+    name_label: chain-alpha
+    power_state: Running
+    tags: [chain, mainnet, pinned, tier-0, primary]
+    CPUs: { number: 8 }
+    memory: { size: 17181941760 }                  # 16 GiB
+    mainIpAddress: 198.51.100.55
+    addresses:                                     # per-NIC, from guest tools
+      0/ipv4/0: 198.51.100.55                      # eth0 = fleet-lan
+      1/ipv4/0: 192.0.2.103                        # eth1 = lab-lan
+    os_version: { distro: nixos, name: "NixOS 26.05 (Yarara)", uname: "6.12.78" }
+    virtualizationMode: hvm
+    boot: { firmware: uefi, order: cn }
+    managementAgentDetected: true
+    auto_poweron: false
+    VBDs:
+      - { device: xvda, position: "0", VDI: { name_label: root,             size: 34359738368,    $SR: 17ff8806-c51e-8626-d9f8-812db76519ca } }
+      - { device: xvdb, position: "1", VDI: { name_label: chaind-mainnet,   size: 1610612736000,  $SR: d5e8f9d6-585a-8f78-3147-affbae0caec0 } }
+      - { device: xvdc, position: "2", VDI: { name_label: chaind-testnet,   size: 137438953472,   $SR: d5e8f9d6-585a-8f78-3147-affbae0caec0 } }
+      - { device: xvde, position: "4", VDI: { name_label: explorer-testnet, size: 34359738368,    $SR: d5e8f9d6-585a-8f78-3147-affbae0caec0 } }
+      - { device: xvdf, position: "5", VDI: { name_label: explorer-mainnet, size: 68719476736,    $SR: d5e8f9d6-585a-8f78-3147-affbae0caec0 } }
+      - { device: xvdg, position: "6", VDI: { name_label: indexer-mainnet,  size: 268435456000,   $SR: d5e8f9d6-585a-8f78-3147-affbae0caec0 } }
+      - { device: xvdh, position: "7", VDI: { name_label: indexer-testnet,  size: 68719476736,    $SR: d5e8f9d6-585a-8f78-3147-affbae0caec0 } }
+      - { device: xvdd, position: "3", is_cd_drive: true, VDI: { name_label: nixos-installer-xcpng-v1.iso, $SR: f32200c9-a779-4bdc-86d0-2102ce2efae3 } }
+    VIFs:
+      - { device: "0", MAC: "7e:5d:02:65:92:cb", $network: b5ed91ed-030c-6a6f-b5c5-2508c7ad4af3, attached: true }   # fleet-lan
+      - { device: "1", MAC: "c2:3b:1f:fa:1a:1d", $network: 73da78ee-0c16-c4a3-8046-f614c3682217, attached: true }   # lab-lan
+    fleet:                                         # the fleet's annotation layer
+      fleet_name: chain-alpha                      # key in nix/fleet compute
+      env: infra
+      stack: xo
+      role: workload
+      protect: true
+      services:                                    # from infra.services registry
+        - name: chaind-mainnet
+          category: chain
+          ports: [{ port: 8332, protocol: rpc }, { port: 8333, protocol: p2p }]
+        - name: chaind-testnet
+          category: chain
+          ports: [{ port: 48332, protocol: rpc }, { port: 48333, protocol: p2p }]
+        - name: indexer-mainnet
+          category: indexer
+          ports: [{ port: 50001, protocol: electrum-tcp }, { port: 50002, protocol: electrum-tls }]
+        - name: explorer-mainnet
+          category: explorer
+          ports: [{ port: 8999, protocol: http, ui: true }]
+
+  # ---- tier-0 network spine VM (services-heavy, no extra disks) ----
+  - id: 8f70e854-bc5b-2d3d-5d4c-19bed84064eb        # illustrative uuid from residentVms
+    $container: 2f26fd50-de78-4249-bc9e-0741367f8b50
+    name_label: netcore
+    power_state: Running
+    tags: [egress, ingress, dns, tier-0, spine, vpn, ca]
+    CPUs: { number: 2 }
+    mainIpAddress: 198.51.100.100
+    fleet:
+      fleet_name: netcore
+      env: infra
+      role: workload
+      services:
+        - { name: coredns,  category: dns, ports: [{ port: 53, protocol: dns }] }
+        - { name: step-ca,  category: pki, ports: [{ port: 9000, protocol: https }] }
+        - { name: kea-dhcp, category: dhcp, ports: [{ port: 67, protocol: dhcp }] }
+        - { name: chrony,   category: ntp, ports: [{ port: 123, protocol: ntp }] }
+
+  # ---- nested hypervisor VM (PVE cluster member) ----
+  # Six of these exist (pve-platform, pve-apps, pve-db, pve-nodes,
+  # pve-indexers, pve-dev) plus pbs. Identified by tag `pve-host`.
+  - id: 4b523f2a-3557-0e51-c942-6c1a98e5f705
+    $container: 2f26fd50-de78-4249-bc9e-0741367f8b50
+    $pool: fe435ebc-e2c5-b9e5-83f4-7ddd5fbf3683
+    name_label: pve-db
+    power_state: Running
+    tags: [db, pve-host, tier-1]
+    CPUs: { number: 4 }
+    memory: { size: 8592007168 }                   # 8 GiB
+    mainIpAddress: null                            # no guest tools on PVE → XO sees no IP
+    os_version: {}                                 # ditto; PVE layer fills this in
+    virtualizationMode: hvm
+    boot: { firmware: uefi, order: cn }
+    managementAgentDetected: false
+    VBDs:
+      - { device: xvda, position: "0", VDI: { name_label: root, size: 34359738368,  usage: 26727944704,  $SR: 17ff8806-c51e-8626-d9f8-812db76519ca } }
+      - { device: xvdb, position: "1", VDI: { name_label: data, size: 549755813888, usage: 272696844800, $SR: 17ff8806-c51e-8626-d9f8-812db76519ca } }
+    VIFs:
+      - { device: "0", MAC: "bc:24:11:00:99:32", $network: 73da78ee-0c16-c4a3-8046-f614c3682217, attached: true }
+    fleet:
+      env: infra
+      role: hypervisor                             # ← marks the nesting
+      protect: true
+
+    # Nested layer: NOT from XO. Source = PVE API (pvesh get /cluster/resources
+    # or /nodes/<node>/lxc) joined with the fleet manifest + service registry.
+    # Field names follow the PVE cluster-resources API (vmid, type, status,
+    # maxcpu, maxmem, maxdisk) for the same map-1:1 reason as the XO layer.
+    proxmox:
+      cluster:
+        name: example-pve
+        endpoint: https://198.51.100.98:8006       # VIP on pve-platform
+        node: pve-db                               # this member's node name
+        peers: [pve-platform, pve-apps, pve-nodes, pve-indexers, pve-dev]
+      storage:                                     # node-local resources
+        - { storage: local-lvm, type: lvmthin, content: [images, rootdir] }
+      networks:
+        - { iface: vmbr1, cidr: 198.51.100.0/24, comment: bridged to XO fleet-lan via eth0 }
+      guests:
+        - vmid: 226
+          name: app-db
+          type: lxc
+          status: running
+          node: pve-db
+          maxcpu: 2
+          maxmem: 4294967296                       # 4 GiB
+          tags: [postgres]
+          ip: 198.51.100.226
+          mount_points:
+            - { storage: local-lvm, path: /data, size: 34359738368, backup: true }
+          fleet:
+            env: dev
+            stack: data
+            protect: true
+            services:
+              - name: app-db
+                category: database
+                ports: [{ port: 5432, protocol: postgres }, { port: 9100, protocol: http, ui: false }]
+        - vmid: 204
+          name: analytics-db
+          type: lxc
+          status: running
+          node: pve-db
+          maxcpu: 4
+          maxmem: 8589934592
+          tags: [postgres, analytics]
+          ip: 198.51.100.204
+          fleet:
+            env: dev
+            stack: data
+            protect: true
+            services:
+              - name: analytics-db
+                category: database
+                ports: [{ port: 5432, protocol: postgres }]
+        # ... remaining pve-db guests: explorer-db, timescale-db
+
+  # ... 20 more VMs on this host (vapp-*, XOA itself, s3, vpn, nix-builder,
+  #     pbs, pve-platform, pve-apps, pve-nodes, pve-indexers, pve-dev)
