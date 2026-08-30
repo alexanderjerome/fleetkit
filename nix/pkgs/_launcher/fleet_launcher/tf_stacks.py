@@ -1,15 +1,15 @@
-"""fleet tf — Terranix/OpenTofu stack lifecycle (SKRYBITDEV-599).
+"""fleet tf — Terranix/OpenTofu stack lifecycle.
 
 Scope is `<env>.<stack>` dot-paths resolved by prefix-match against the
 auto-generated leaf stack list. Examples:
 
-    sk deploy tf list
-    sk deploy tf apply platform.bootstrap
-    sk deploy tf apply platform                    # every platform.* leaf
-    sk deploy tf apply all                         # every leaf
-    sk deploy tf preview dev.bitcoin.mainnet
-    sk deploy tf destroy dev.apps.testnet --target api-testnet
-    sk deploy tf import platform.bootstrap proxmox_virtual_environment_pool.pool-core core
+    fleet deploy tf list
+    fleet deploy tf apply platform.bootstrap
+    fleet deploy tf apply platform                    # every platform.* leaf
+    fleet deploy tf apply all                         # every leaf
+    fleet deploy tf preview platform.core
+    fleet deploy tf destroy dev.apps --target api-dev
+    fleet deploy tf import platform.bootstrap proxmox_virtual_environment_pool.pool-core core
 
 Every operation flows through `nix build .#tf-<env>-<stack-dashed>` to
 regenerate config.tf.json from the unified fleet, then runs
@@ -20,7 +20,7 @@ Destruction safety:
   resolves to a block with `lifecycle.prevent_destroy = true`. The
   unprotect workflow is printed.
 - `--target-dependents` doesn't exist in OpenTofu by design (-target is
-  upward-only), so the SKRYBITDEV-598 footgun can't recur.
+  upward-only), so a destroy can never cascade downward into dependents.
 """
 from __future__ import annotations
 
@@ -50,13 +50,10 @@ console = Console()
 #
 # Cache key = SHA256 of every file that could materially affect terranix
 # output: flake.lock + every .nix under nix/fleet, nix/hosts (per-host
-# fleet.compute entries since SKRYBITDEV-628), nix/tf (emitters; was
-# nix/terranix pre-628) and nix/lib (emitter helpers). False positives
-# (rebuilding when output would be identical) are cheap because Nix
-# dedups in its store; false negatives would be incorrect, so the
-# fingerprint stays conservative. INFRA-42 fixed a false negative: the
-# old list still hashed the removed nix/terranix dir and missed
-# nix/hosts entirely, so host-file edits reused stale config.tf.json.
+# fleet.compute entries), nix/tf (emitters) and nix/lib (emitter
+# helpers). False positives (rebuilding when output would be identical)
+# are cheap because Nix dedups in its store; false negatives would be
+# incorrect, so the fingerprint stays conservative.
 
 def _input_hash(root: Path) -> str:
     h = hashlib.sha256()
@@ -259,11 +256,11 @@ def _raise_if_target_protected(workdir: Path, targets: list[str]) -> None:
     if hits:
         console.print(f"[red]ERROR:[/red] Refusing to destroy protected resource(s): {hits}")
         console.print("")
-        console.print("Unprotect workflow (SKRYBITDEV-598 / ADR-014/015):")
+        console.print("Unprotect workflow:")
         console.print("  1. Edit the fleet entry in nix/fleet/{fleet,resources}.nix: set protect = false")
         console.print("     (OR remove the stateful tag that forced it via destruction_policy)")
-        console.print("  2. `sk deploy tf apply <scope>` — lifecycle.prevent_destroy is removed")
-        console.print("  3. `sk deploy tf destroy <scope> --target <name>`")
+        console.print("  2. `fleet deploy tf apply <scope>` — lifecycle.prevent_destroy is removed")
+        console.print("  3. `fleet deploy tf destroy <scope> --target <name>`")
         console.print("  4. Re-enable protect=true before the next apply")
         sys.exit(1)
 
@@ -272,7 +269,7 @@ def _raise_if_target_protected(workdir: Path, targets: list[str]) -> None:
 
 @click.group("tf")
 def tf_stacks() -> None:
-    """Terranix/OpenTofu stack lifecycle (SKRYBITDEV-599).
+    """Terranix/OpenTofu stack lifecycle.
 
     Scope is `<env>.<stack>` dot-paths. Prefix-match selects leaves.
     """
@@ -368,7 +365,7 @@ def tf_apply(scope: str, target: tuple[str, ...], yes: bool, parallelism: int, i
             console.print("[green]✓[/green] inventory refreshed")
             console.print(
                 "[dim]Tip: if a tier-0 VM's IP shows as empty, the guest agent "
-                "may not have reported yet — re-run [bold]sk inventory generate[/bold] "
+                "may not have reported yet — re-run [bold]fleet inventory generate[/bold] "
                 "in 30s.[/dim]"
             )
         except Exception as exc:
@@ -408,7 +405,7 @@ def tf_import(leaf: str, address: str, id_: str) -> None:
     """tofu import ADDRESS ID_ into the state for LEAF.
 
     Example:
-      sk deploy tf import platform.bootstrap \\
+      fleet deploy tf import platform.bootstrap \\
           proxmox_virtual_environment_pool.pool-core core
     """
     root = find_project_root()
@@ -516,7 +513,7 @@ def tf_state_mv(scope: str, from_addr: str, to_addr: str) -> None:
     proxmox_cluster_options in bpg/proxmox).
 
     Example:
-      sk deploy tf state-mv platform.bootstrap \\
+      fleet deploy tf state-mv platform.bootstrap \\
         proxmox_virtual_environment_cluster_options.foo \\
         proxmox_cluster_options.foo
     """
@@ -548,16 +545,15 @@ def tf_rekey(scope: str, old_name: str, new_name: str, dry_run: bool, yes: bool)
     OLD_NAME (the container plus any sibling resources the emitter keys
     off the same fleet name) to NEW_NAME, so the next `apply` is an
     in-place update instead of a replace. It codifies the manual
-    `tofu state mv`-before-apply dance done for observe→grafana and
-    api-mainnet→dash.
+    `tofu state mv`-before-apply dance a host rename otherwise requires.
 
     This is only the STATE half of a rename. Full workflow:
 
       1. Rename the fleet entry yourself: the attr key in
          nix/hosts/<provider>/<old>.nix, the hostsRegistry key, and the
          file → <new>.nix.
-      2. sk deploy tf rekey <stack> <old> <new>     ← you are here
-      3. sk deploy tf apply <stack> --target <type>.<new>
+      2. fleet deploy tf rekey <stack> <old> <new>     ← you are here
+      3. fleet deploy tf apply <stack> --target <type>.<new>
          (the PVE guest name/hostname updates in place)
 
     Touches tofu state only — never running infra, and never the Nix
@@ -565,7 +561,7 @@ def tf_rekey(scope: str, old_name: str, new_name: str, dry_run: bool, yes: bool)
     the rename was incomplete (a sibling wasn't moved) or an attr drifted.
 
     Example:
-      sk deploy tf rekey platform.core observe grafana
+      fleet deploy tf rekey platform.core oldname newname
     """
     root = find_project_root()
     leaves = _resolve_scope(root, scope)
@@ -621,7 +617,7 @@ def tf_rekey(scope: str, old_name: str, new_name: str, dry_run: bool, yes: bool)
         for a in untouched:
             console.print(f"  {a}")
         console.print("[dim]If they belong to this host, move them with "
-                      "`sk deploy tf state-mv` manually.[/dim]")
+                      "`fleet deploy tf state-mv` manually.[/dim]")
 
     if dry_run:
         console.print("")
@@ -651,7 +647,7 @@ def tf_rekey(scope: str, old_name: str, new_name: str, dry_run: bool, yes: bool)
     console.print("")
     console.print("[dim]If the plan above shows a destroy/replace, the rename was incomplete "
                   "(a sibling wasn't moved) or an attribute drifted. Otherwise finish with "
-                  f"[bold]sk deploy tf apply {leaf} --target {new_addr_types[0]}[/bold] to land "
+                  f"[bold]fleet deploy tf apply {leaf} --target {new_addr_types[0]}[/bold] to land "
                   "the in-place hostname update.[/dim]")
 
 @tf_stacks.command("state-pull")
@@ -702,14 +698,14 @@ def tf_state_push(scope: str, statefile: str) -> None:
 
 
 @tf_stacks.command("state-export")
-@click.argument("scope", default="")
+@click.argument("scope", default="all")
 @click.option("--out-dir", default="state-export", show_default=True,
               type=click.Path(file_okay=False),
               help="Directory to write <leaf>.tfstate.json files into.")
 def tf_state_export(scope: str, out_dir: str) -> None:
     """Export live tfstate JSON for SCOPE (or the whole fleet) to files.
 
-    SCOPE is a leaf id or prefix (empty = every leaf stack). One
+    SCOPE is a leaf id or prefix (default "all" = every leaf stack). One
     <env>-<stack>.tfstate.json per leaf lands in --out-dir, plus a
     manifest.json listing what was exported. Read-only: this is
     `tofu state pull` per stack, nothing is modified.
@@ -717,7 +713,7 @@ def tf_state_export(scope: str, out_dir: str) -> None:
     import json as _json
 
     root = find_project_root()
-    leaves = _resolve_scope(root, scope) if scope else _resolve_scope(root, "")
+    leaves = _resolve_scope(root, scope or "all")
     if not leaves:
         console.print("[red]ERROR:[/red] no leaf stacks matched.")
         sys.exit(1)

@@ -1,6 +1,6 @@
 """Remote command execution on fleet hosts.
 
-Provides `sk remote <host> <command>` for quick SSH access to any container
+Provides `fleet remote <host> <command>` for quick SSH access to any container
 in the fleet, resolving the IP from hosts.json. With --pct-exec, routes
 through the Proxmox host using `pct exec` (useful when SSH is broken on
 the target container).
@@ -46,9 +46,9 @@ def remote(host_name: str, command: tuple[str, ...], use_pct: bool, user: str) -
 
     \b
     Examples:
-        sk remote grafana "systemctl status grafana"
-        sk remote btc-mainnet "df -h"
-        sk remote btc-mainnet --pct-exec "journalctl -u mempool --no-pager -n 20"
+        fleet remote grafana "systemctl status grafana"
+        fleet remote builder "df -h"
+        fleet remote builder --pct-exec "journalctl -u nix-daemon --no-pager -n 20"
     """
     hosts = _load_hosts()
 

@@ -22,5 +22,12 @@
 
   config.fleet.hostsRegistry.example = { helpers, ... }: {
     infra.networking.singleInterface = true;
+
+    # Fleet services are enabled per host under the strata namespace,
+    # infra.<stratum>.<module> — e.g.:
+    #   infra.data.postgresql.enable = true;
+    #   infra.ingress.enable = true;
+    #   infra.observability.stack.enable = true;
+    # See the "Infra modules" chapter of the docs for the full catalog.
   };
 }

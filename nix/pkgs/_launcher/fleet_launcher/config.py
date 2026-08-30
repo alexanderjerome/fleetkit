@@ -158,8 +158,9 @@ def load_extensions(root_group: click.Group) -> None:
     Every `*.py` in `[cli].extensions_dir` (default `cli-ext/`, relative
     to the repo root) is imported; each file exposes `COMMANDS`, a list
     of click commands/groups to add. This is how a consumer repo keeps
-    company-specific tooling (app test harnesses, chain helpers, …) on
-    the same `fleet` entry point without forking the framework.
+    company-specific tooling (app test harnesses, product-specific
+    operator commands such as a pricing-catalog CLI, …) on the same
+    `fleet` entry point without forking the framework.
     """
     ext_dir = repo_root() / get("cli.extensions_dir", "cli-ext")
     if not ext_dir.is_dir():

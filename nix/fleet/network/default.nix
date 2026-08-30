@@ -13,13 +13,13 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "ldap://auth.example.internal:389";
-        description = "Authentik LDAP outpost URI (used by sssd + Proxmox realm). null ⇒ no LDAP directory; required (asserted) when infra.sssd is enabled.";
+        description = "Authentik LDAP outpost URI (used by sssd + Proxmox realm). null ⇒ no LDAP directory; required (asserted) when infra.auth.sssd is enabled.";
       };
       base_dn = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "dc=ldap,dc=example,dc=com";
-        description = "LDAP base DN for user/group searches. null ⇒ no LDAP directory; required (asserted) when infra.sssd is enabled.";
+        description = "LDAP base DN for user/group searches. null ⇒ no LDAP directory; required (asserted) when infra.auth.sssd is enabled.";
       };
       user_ou = lib.mkOption {
         type = lib.types.str;
@@ -85,7 +85,7 @@
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "example.internal";
-      description = "Internal search domain. null ⇒ no internal zone: fleet links pin no search domain, provisioned guests get no create-time DNS domain, and infra.dhcp (asserted) needs an explicit domain.";
+      description = "Internal search domain. null ⇒ no internal zone: fleet links pin no search domain, provisioned guests get no create-time DNS domain, and infra.network.dhcp (asserted) needs an explicit domain.";
     };
 
     search_domains = lib.mkOption {

@@ -27,8 +27,8 @@ playbooks win name resolution in `fleet ansible run`.
 
 Module-adjacent playbooks: operational playbooks that belong to a
 specific NixOS module live next to it in nix/modules/ (e.g.
-nix/modules/infra/services/builder/attic-rebootstrap.yml next to
-attic.nix). They are discovered by globbing nix/modules/**/*.yml in the
+nix/modules/infra/build/attic/attic-rebootstrap.yml next to
+the attic module). They are discovered by globbing nix/modules/**/*.yml in the
 framework tree ($FLEET_MODULES_DIR from the Nix wrapper, repo-relative
 fallback) and resolve by bare stem, at the lowest precedence.
 """
@@ -89,8 +89,8 @@ def module_playbooks() -> dict[str, Path]:
     """Discover module-adjacent playbooks in the framework modules tree.
 
     Some operational playbooks live next to the NixOS module they service
-    (e.g. nix/modules/infra/services/builder/attic-rebootstrap.yml next to
-    attic.nix) rather than in ansible/playbooks/. Any ``*.yml`` under
+    (e.g. nix/modules/infra/build/attic/attic-rebootstrap.yml next to
+    its module) rather than in ansible/playbooks/. Any ``*.yml`` under
     nix/modules/ whose name looks like a playbook slug (lowercase,
     digits, hyphens) is resolvable by its bare stem. Lowest precedence:
     consumer playbooks and the framework ansible/playbooks/ tree both win

@@ -36,7 +36,7 @@
     #   tailnetSuffix = "hs.example.dev"; # MagicDNS base for tailscale serveUI
     # };
 
-    # # ACME account registration — needed by infra.caddy and by the
+    # # ACME account registration — needed by infra.ingress and by the
     # # host-cert module once internalCa.acmeDirectory is set.
     # acmeEmail = "admin@example.dev";
 
@@ -48,12 +48,12 @@
     # auth.outpostUrl = "http://192.0.2.13:9000";  # forward-auth outpost for
     #                                              # public caddy vhosts
     # auth.oidcBaseUrl = "https://auth.example.dev"; # OIDC login (e.g.
-    #                                                # infra.grafana-stack.oidc)
+    #                                                # infra.observability.stack.oidc)
 
     # # Edge/network extras:
     # network = {
-    #   wanIp = "203.0.113.10";        # public DNS pins (infra.acme-dns)
-    #   lanCidr = "192.0.2.0/24";      # default network ACLs (infra.postgresql)
+    #   wanIp = "203.0.113.10";        # public DNS pins (infra.pki.acmeDns)
+    #   lanCidr = "192.0.2.0/24";      # default network ACLs (infra.data.postgresql)
     #   mgmtCidr = "198.51.100.0/24";  # hypervisor management net, if separate
     #   upstreamResolvers = [ "192.0.2.1" "1.1.1.1" ]; # coredns forwarders
     # };

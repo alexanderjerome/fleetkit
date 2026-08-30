@@ -18,26 +18,6 @@ menus:
     icon: rocket
     menus:
 
-      infra:
-        label: Infra Pipeline
-        description: Full 7-stage deploy orchestrator
-        commands:
-          interactive:
-            label: Interactive deploy
-            description: Launch the TUI pipeline (all stages)
-            run: cd infra && python deploy.py
-          stage:
-            label: Run a single stage
-            description: Execute one pipeline stage by name
-            run: cd infra && python deploy.py --stage {stage}
-            args:
-              - name: stage
-                prompt: "Stage (bootstrap|compute|platform|promote|data|services|observability):"
-          status:
-            label: Pipeline status
-            description: Show current pipeline state
-            run: cd infra && python deploy.py --status
-
       nixos:
         label: NixOS (Colmena)
         description: Declarative NixOS configuration deployment
@@ -45,36 +25,39 @@ menus:
           apply-all:
             label: Apply to all hosts
             description: Deploy NixOS config to every host
-            run: colmena apply --impure
+            run: fleet deploy nixos apply all
           apply-host:
             label: Apply to a host
             description: Deploy NixOS config to a single host
-            run: colmena apply --impure --on {host}
+            run: fleet deploy nixos apply host {host}
             args:
               - name: host
                 prompt: "Hostname:"
           apply-remote:
             label: Apply (build on target)
             description: Deploy, building on the target host itself
-            run: colmena apply --impure --on {host} --build-on-target
+            run: fleet deploy nixos apply remote {host}
             args:
               - name: host
                 prompt: "Hostname:"
-          apply-stack:
-            label: Apply to a stack
-            description: Deploy to all hosts tagged with a stack name
-            run: colmena apply --impure --on @{stack}
+          apply-tag:
+            label: Apply to a tag
+            description: Deploy to all hosts carrying a deployment tag
+            run: fleet deploy nixos apply tag {tag}
             args:
-              - name: stack
-                prompt: "Stack tag:"
+              - name: tag
+                prompt: "Deployment tag:"
           build:
             label: Build only
-            description: Build all host configs locally (no deploy)
-            run: colmena build --impure
+            description: Build a host's config locally (no deploy)
+            run: fleet deploy nixos build host {host}
+            args:
+              - name: host
+                prompt: "Hostname:"
 
       tf:
         label: Terranix / OpenTofu
-        description: LXC container lifecycle via terranix-emitted tofu stacks
+        description: Infrastructure lifecycle via terranix-emitted tofu stacks
         commands:
           list:
             label: List stacks
@@ -86,14 +69,14 @@ menus:
             run: fleet deploy tf preview {scope}
             args:
               - name: scope
-                prompt: "Stack scope (e.g. dev.bitcoin.signet):"
+                prompt: "Stack scope (e.g. platform.core):"
           apply:
             label: Stack apply
             description: Apply a stack (or prefix)
             run: fleet deploy tf apply {scope} --yes
             args:
               - name: scope
-                prompt: "Stack scope (e.g. dev.bitcoin.signet):"
+                prompt: "Stack scope (e.g. platform.core):"
           destroy:
             label: Stack destroy
             description: Destroy a stack (preflight-protected)
@@ -102,6 +85,32 @@ menus:
               - name: scope
                 prompt: "Stack scope:"
             confirm: true
+          state-pull:
+            label: State pull
+            description: Dump a stack's remote state to a local JSON file
+            run: fleet deploy tf state-pull {scope} {out}
+            args:
+              - name: scope
+                prompt: "Stack (single leaf):"
+              - name: out
+                prompt: "Output file:"
+          state-push:
+            label: State push
+            description: Upload a locally edited state file for a stack
+            run: fleet deploy tf state-push {scope} {statefile}
+            args:
+              - name: scope
+                prompt: "Stack (single leaf):"
+              - name: statefile
+                prompt: "State file:"
+            confirm: true
+          state-export:
+            label: State export
+            description: Export live tfstate JSON for all (or matched) stacks
+            run: fleet deploy tf state-export {scope}
+            args:
+              - name: scope
+                prompt: "Stack scope (or 'all'):"
 
   inventory:
     label: Inventory
@@ -110,81 +119,57 @@ menus:
     commands:
       generate:
         label: Generate inventory
-        description: Build hosts.json from YAML + live PVE state
+        description: Build hosts.json from the fleet manifest
         run: fleet inventory generate
-      generate-offline:
-        label: Generate (offline)
-        description: Build hosts.json from YAML only (no PVE API)
-        run: fleet inventory generate --offline
       show:
         label: Show inventory
         description: Display current host inventory table
         run: fleet inventory show
+      diff:
+        label: Diff declared vs live
+        description: Show drift between fleet manifest and live PVE state
+        run: fleet inventory diff
       scan:
         label: Scan subnet
         description: Scan for used/available IPs on the network
         run: fleet inventory scan
+
+  ansible:
+    label: Ansible
+    description: Generated inventory + framework playbooks
+    icon: gear
+    commands:
+      inventory:
+        label: Generate inventory
+        description: Derive the Ansible inventory from the fleet manifest
+        run: fleet ansible inventory
+      playbooks:
+        label: List playbooks
+        description: List playbooks resolvable by `fleet ansible run`
+        run: fleet ansible playbooks
+      run:
+        label: Run playbook
+        description: Run a framework or consumer playbook against the fleet
+        run: fleet ansible run {playbook}
+        args:
+          - name: playbook
+            prompt: "Playbook name (see `fleet ansible playbooks`):"
+
+  mcp:
+    label: MCP
+    description: AI-agent (MCP) integration
+    icon: robot
+    commands:
+      config:
+        label: Generate .mcp.json
+        description: Derive MCP server entries from the fleet's declared settings
+        run: fleet mcp config
 
   bootstraps:
     label: Bootstraps
     description: One-time setup and platform utilities
     icon: wrench
     menus:
-
-      hiro:
-        label: Hiro
-        description: Snapshot bootstrapping for Hiro databases
-        commands:
-          discover:
-            label: Discover snapshots
-            description: Query GCS bucket for available snapshots
-            run: fleet hiro discover
-          pipeline:
-            label: Run pipeline (local)
-            description: Full bootstrap pipeline on this machine
-            run: fleet hiro pipeline
-          remote-pipeline:
-            label: Run pipeline (remote)
-            description: Launch bootstrap on a remote host
-            run: fleet hiro remote pipeline
-          remote-status:
-            label: Remote status
-            description: Check remote bootstrap progress
-            run: fleet hiro remote status
-          remote-attach:
-            label: Remote attach
-            description: Reconnect to a remote bootstrap session
-            run: fleet hiro remote attach
-          remote-kill:
-            label: Remote kill
-            description: Kill a remote bootstrap session
-            run: fleet hiro remote kill
-            confirm: true
-
-      komodo:
-        label: Komodo
-        description: Komodo Core server management
-        commands:
-          ensure-api-key:
-            label: Ensure API key
-            description: Ensure a valid Komodo API key exists
-            run: fleet komodo ensure-api-key
-          register-server:
-            label: Register server
-            description: Register a periphery host with Komodo
-            run: fleet komodo register-server
-          server-exists:
-            label: Check server
-            description: Check if a server is already registered
-            run: fleet komodo server-exists
-          export-resources:
-            label: Export resources
-            description: Export all Komodo resources to TOML
-            run: fleet komodo export-resources
-          create-builder:
-            label: Create builder
-            description: Designate a server as a Komodo builder
-            run: fleet komodo create-builder
 
       pve:
         label: Proxmox VE
@@ -203,84 +188,56 @@ menus:
             description: Show PVE container overview
             run: fleet pve status
 
+      step-ca:
+        label: step-ca PKI
+        description: One-time step-ca root/intermediate bootstrap
+        commands:
+          bootstrap:
+            label: Bootstrap step-ca
+            description: Initialize the internal ACME CA on the netgate host
+            run: fleet bootstraps step-ca
+
   devtools:
     label: Dev Tools
-    description: Secrets, local services, and developer utilities
+    description: Secrets and developer utilities
     icon: tools
     menus:
 
       secrets:
         label: Secrets
-        description: SOPS secrets management and generation
+        description: SOPS secrets management
         commands:
-          list:
-            label: List keys
-            description: List all secret key paths
-            run: fleet secrets list
-          check:
-            label: Check secrets
-            description: Check for placeholder/unset secrets
-            run: fleet secrets check
+          init:
+            label: Initialize SOPS store
+            description: Scaffold age key, .sops.yaml, and encrypted secrets stub
+            run: fleet devtools secrets init
           edit:
             label: Edit secrets
             description: Edit secrets in terminal editor
-            run: fleet secrets edit
-          decrypt:
-            label: Decrypt
-            description: Decrypt to plaintext for IDE editing
-            run: fleet secrets decrypt
-          encrypt:
-            label: Encrypt
-            description: Re-encrypt plaintext back to SOPS
-            run: fleet secrets encrypt
-          generate:
-            label: Generate secret
-            description: Generate a random secret value
-            run: fleet secrets generate
-          generate-set:
-            label: Generate + set
-            description: Generate and write a secret to a SOPS key
-            run: fleet secrets generate --set {key}
+            run: fleet devtools secrets edit
+          keys-list:
+            label: List keys
+            description: List all secret key paths
+            run: fleet devtools secrets keys list
+          keys-add:
+            label: Add key
+            description: Add or set a secret key
+            run: fleet devtools secrets keys add {key} {value}
             args:
               - name: key
-                prompt: "SOPS key path:"
-          cluster-token:
-            label: Cluster token
-            description: Generate k3s join token for a cluster
-            run: fleet secrets cluster-token {cluster}
-            args:
-              - name: cluster
-                prompt: "Cluster name:"
-          bootstrap-sops:
-            label: Bootstrap SOPS
-            description: Pre-seed SOPS age key on remote hosts
-            run: fleet secrets bootstrap {hosts}
-            args:
-              - name: hosts
-                prompt: "Host(s):"
-
-      submodules:
-        label: Submodules
-        description: Git submodule synchronization
-        commands:
-          sync:
-            label: Sync
-            description: Add enabled submodules, remove disabled ones
-            run: python3 submodules/sync.py sync
-          sync-dry:
-            label: Sync (dry run)
-            description: Preview sync without making changes
-            run: python3 submodules/sync.py sync --dry-run
-          generate:
-            label: Generate repos.toml
-            description: Refresh repos.toml from GitHub API
-            run: python3 submodules/sync.py generate
+                prompt: "SOPS key path (slash-separated):"
+              - name: value
+                prompt: "Value:"
 
       utilities:
         label: Utilities
-        description: Miscellaneous build and schema tools
+        description: Miscellaneous build and inspection tools
         commands:
           builder-cache-key:
             label: Builder cache key
-            description: Fetch Nix binary cache public key from builder
-            run: just builder-cache-key
+            description: Fetch Nix binary cache public key from the builder host
+            run: fleet devtools utilities builder-cache-key
+          dump-cli:
+            label: Dump CLI surface
+            description: Print the full command tree with help text
+            run: fleet devtools utilities dump-cli

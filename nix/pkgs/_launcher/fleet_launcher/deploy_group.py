@@ -1,13 +1,9 @@
 """fleet deploy — Deployment pipelines.
 
 Groups NixOS/Colmena and Terranix/OpenTofu project commands under a
-single ``deploy`` parent.
-
-SKRYBITDEV-599 replaced Pulumi with terranix. The old `sk deploy pulumi`
-verb and the `sk deploy infra` end-to-end orchestrator are gone —
-provisioning goes through `sk deploy tf <apply|preview|destroy|…>` and
-NixOS deploys continue via `sk deploy nixos apply`. See
-``docs/adr/adr-015-terranix-replatform.md`` for the rationale.
+single ``deploy`` parent: provisioning goes through
+`fleet deploy tf <apply|preview|destroy|…>` and NixOS deploys through
+`fleet deploy nixos apply`.
 """
 from __future__ import annotations
 

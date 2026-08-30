@@ -167,7 +167,7 @@ in
       lib.unique (builtins.concatLists (lib.mapAttrsToList (_: allPorts) cfg));
 
     # Services with caddy.enable get a Caddy vhost on the primary port.
-    infra.caddy.services = lib.mapAttrs (name: svc: {
+    infra.ingress.services = lib.mapAttrs (name: svc: {
       name = if svc.caddy.hostname != null then svc.caddy.hostname else name;
       port = svc.port;
       host = svc.host;

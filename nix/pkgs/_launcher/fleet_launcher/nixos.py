@@ -91,9 +91,9 @@ def _check_no_concurrent_deploy(host_names: tuple[str, ...] | None = None) -> No
     console.print("  • [cyan]wait[/cyan] for the existing deploy to finish")
     if host_names:
         host_arg = " ".join(host_names) if len(host_names) == 1 else ""
-        console.print(f"  • [cyan]sk devtools reset-connection {host_arg}[/cyan] — clear orphans and retry")
+        console.print(f"  • [cyan]fleet devtools reset-connection {host_arg}[/cyan] — clear orphans and retry")
     else:
-        console.print("  • [cyan]sk devtools reset-connection --broad[/cyan] — clear all deploy orphans")
+        console.print("  • [cyan]fleet devtools reset-connection --broad[/cyan] — clear all deploy orphans")
     console.print()
     sys.exit(2)
 
@@ -179,7 +179,7 @@ def apply_all(args: tuple[str, ...], no_refresh: bool):
 
 @apply.command("host")
 @click.argument("names", nargs=-1, required=True)
-@click.option("--ip", default=None, help="Override target IP for deployment (e.g. use 10.20.20.x when 10.40.0.x is unreachable).")
+@click.option("--ip", default=None, help="Override target IP for deployment (e.g. reach the host over another network when its primary IP is unreachable).")
 @click.option("--no-refresh", is_flag=True, help="Skip hosts.json refresh from PVE API.")
 @click.option("--no-session", is_flag=True, help="Run inline instead of in a detached tmux session (for CI / scripts).")
 @click.option("--reboot", is_flag=True,
@@ -193,8 +193,8 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
     Each host runs in its own detached tmux session by default so
     multiple deploys can run concurrently. Inspect with:
 
-      sk sessions list
-      sk sessions attach sk-deploy-<name>
+      fleet sessions list
+      fleet sessions attach sk-deploy-<name>
 
     Use --no-session to run inline. Use --ip to override the default
     hosts.json IP.
@@ -212,10 +212,10 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
             if running_inside(session_name):
                 # Inner session — fall through to inline deploy below.
                 continue
-            # Absolute path to this sk binary (INFRA-171): tmux server env /
-            # devshell PATH don't reliably carry `sk`. If colmena is missing
-            # in the session env, the inner sk re-execs via `nix develop`
-            # itself (see main._maybe_reexec_for_missing_tools).
+            # Absolute path to this fleet binary: tmux server env /
+            # devshell PATH don't reliably carry `fleet`. If colmena is
+            # missing in the session env, the inner fleet re-execs via
+            # `nix develop` itself (see main._maybe_reexec_for_missing_tools).
             inner_cmd = [sk_executable(), "deploy", "nixos", "apply", "host",
                          name, "--no-session"]
             if ip:

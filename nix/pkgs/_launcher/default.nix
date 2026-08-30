@@ -11,7 +11,7 @@
 , ansibleTree ? ../../../ansible
   # The framework nix/modules/ tree, baked in as $FLEET_MODULES_DIR so
   # module-adjacent playbooks (nix/modules/**/<name>.yml, e.g.
-  # infra/services/builder/attic-rebootstrap.yml) resolve from the
+  # infra/build/attic/attic-rebootstrap.yml) resolve from the
   # installed package too.
 , modulesTree ? ../../modules
 }:
@@ -30,11 +30,9 @@ python3.pkgs.buildPythonApplication {
   dependencies = with python3.pkgs; [
     click
     rich
-    questionary
     pyyaml
     proxmoxer
     requests
-    cryptography   # `sk vaultwarden bootstrap` Bitwarden client crypto (INFRA-100)
   ];
 
   # Runtime-dep check dropped: optional integrations import lazily. Drop

@@ -101,8 +101,8 @@ def build_template(host: str | None, image_type: str, builder_nix: str | None, t
     using nix-build on the PVE host, then installs it to Proxmox storage.
 
     Examples:
-      sk bootstraps pve build-template              # LXC (default)
-      sk bootstraps pve build-template --type vm    # VM image
+      fleet bootstraps pve build-template              # LXC (default)
+      fleet bootstraps pve build-template --type vm    # VM image
     """
     pve_host, pve_user = _get_pve_config(host)
 
@@ -221,8 +221,8 @@ def create_vm_template(host: str | None, vmid: int, storage: str, template_name:
     via clone.vm_id for VM provisioning.
 
     Examples:
-      sk bootstraps pve create-vm-template
-      sk bootstraps pve create-vm-template --vmid 9001 --storage local-data
+      fleet bootstraps pve create-vm-template
+      fleet bootstraps pve create-vm-template --vmid 9001 --storage local-data
     """
     pve_host, _ = _get_pve_config(host)
 

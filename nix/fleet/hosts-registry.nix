@@ -23,7 +23,7 @@
     example = lib.literalExpression ''
       {
         app-db = { config, pkgs, helpers, ... }: {
-          infra.postgresql.enable = true;
+          infra.data.postgresql.enable = true;
         };
       }
     '';

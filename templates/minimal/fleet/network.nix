@@ -49,7 +49,7 @@
     # # Default: "~/.ssh/sysadmin-key".
     # sysadmin_key_file = "~/.ssh/sysadmin-key";
 
-    # # LDAP directory (only read by hosts that enable infra.sssd):
+    # # LDAP directory (only read by hosts that enable infra.auth.sssd):
     # ldap = {
     #   uri = "ldaps://auth.example.dev:636";
     #   base_dn = "dc=ldap,dc=example,dc=dev";

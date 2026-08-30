@@ -1,7 +1,7 @@
 """fleet reset-connection — Kill stale SSH/nix-copy processes to fleet hosts.
 
 Symptoms this addresses:
-    - `sk deploy nixos apply` hangs indefinitely at "copying path ..."
+    - `fleet deploy nixos apply` hangs indefinitely at "copying path ..."
     - Multiple orphaned `nix ... copy` processes show up in `ps`
     - Nix daemon on target seems stuck after a previous killed deploy
 
@@ -11,12 +11,12 @@ file locks or daemon connections on the target. A fresh deploy then
 contends with the zombies and appears to hang.
 
 Usage examples:
-    sk devtools reset-connection                   # reset ALL fleet hosts
-    sk devtools reset-connection observe           # one host by name
-    sk devtools reset-connection 192.0.2.104       # by IP
-    sk devtools reset-connection 104               # by VMID
-    sk devtools reset-connection observe --restart-daemon --gc
-    sk devtools reset-connection --dry-run
+    fleet devtools reset-connection                   # reset ALL fleet hosts
+    fleet devtools reset-connection grafana           # one host by name
+    fleet devtools reset-connection 192.0.2.104       # by IP
+    fleet devtools reset-connection 104               # by VMID
+    fleet devtools reset-connection grafana --restart-daemon --gc
+    fleet devtools reset-connection --dry-run
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _resolve_targets(target: str | None, hosts: dict) -> dict[str, list[str]]:
 
     TARGET can be:
         - None              → all fleet hosts
-        - host name         → exact or fuzzy match (e.g. "observe", "btc-main")
+        - host name         → exact or fuzzy match (e.g. "grafana", "build")
         - VMID (int string) → match by hosts.json vmid
         - IP (x.y.z.w)      → any host with that IP (or the bare IP if no match)
     """
@@ -295,23 +295,23 @@ def reset_connection(target: str | None, restart_daemon: bool, gc: bool,
     """Kill stale SSH and nix-copy processes to fleet hosts.
 
     \b
-    Use when `sk deploy nixos apply` hangs indefinitely on "copying path...".
+    Use when `fleet deploy nixos apply` hangs indefinitely on "copying path...".
     Root cause is usually orphaned nix/ssh subprocesses from a previously
     killed deploy holding locks on the target's nix-daemon.
 
     \b
     TARGET can be:
         - omitted  → reset connections to ALL fleet hosts
-        - name     → observe, devops, btc-mainnet (fuzzy-matched)
+        - name     → grafana, builder, netgate (fuzzy-matched)
         - VMID     → 104, 205, etc.
         - IP       → 192.0.2.104
 
     \b
     Examples:
-        sk devtools reset-connection
-        sk devtools reset-connection observe
-        sk devtools reset-connection 192.0.2.104 --restart-daemon --gc
-        sk devtools reset-connection --dry-run
+        fleet devtools reset-connection
+        fleet devtools reset-connection grafana
+        fleet devtools reset-connection 192.0.2.104 --restart-daemon --gc
+        fleet devtools reset-connection --dry-run
     """
     hosts = _load_hosts()
     targets = _resolve_targets(target, hosts)

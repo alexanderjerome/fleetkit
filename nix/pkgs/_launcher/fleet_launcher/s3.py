@@ -1,6 +1,6 @@
 """fleet s3 — Garage operator helpers (single-node `s3` host).
 
-Pairs with the declarative bootstrap in nix/modules/infra/services/garage/bootstrap.nix:
+Pairs with the declarative bootstrap in nix/modules/infra/data/s3/default.nix:
 the bootstrap creates the buckets, this CLI mints per-consumer access
 keys + saves them to SOPS. Keys live separately from buckets because
 each consumer mints its own + drops the secret into its own SOPS path
@@ -19,7 +19,7 @@ import sys
 import click
 from rich.console import Console
 
-from ._util import find_project_root, fleet_cache_dir
+from ._util import find_project_root, fleet_cache_dir, sk_executable
 
 console = Console()
 
@@ -119,7 +119,7 @@ def mint_key(key_name: str, bucket: str, sops_prefix: str, rotate: bool,
       <prefix>/region            S3 region label
 
     The bucket must already exist (declared in services.garage layout or
-    via infra.garage-bootstrap.buckets). Grants are --read --write on the
+    via infra.data.s3.buckets). Grants are --read --write on the
     declared bucket; no --owner — owner = the bucket-creator (Garage's
     default key on bootstrap).
     """
@@ -189,7 +189,7 @@ def mint_key(key_name: str, bucket: str, sops_prefix: str, rotate: bool,
     ]
     for path, value in payload:
         sk_res = subprocess.run(
-            ["sk", "devtools", "secrets", "keys", "add", path, value],
+            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
         if sk_res.returncode != 0:

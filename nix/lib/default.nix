@@ -162,7 +162,7 @@ in
             networking.hostName = h.hostname;
             # Colmena injects `nodes` (the whole hive) via specialArgs;
             # this plain-nixosSystem path has no hive, so give modules
-            # that consume `nodes` (e.g. nix/modules/infra/services/pgweb) an empty
+            # that consume `nodes` (e.g. nix/modules/infra/data/pgweb) an empty
             # one. Colmena's eval never sees this module, so there is
             # no conflict with the real value.
             _module.args.nodes = {};

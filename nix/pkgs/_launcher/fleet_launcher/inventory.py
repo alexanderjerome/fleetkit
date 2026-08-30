@@ -176,7 +176,7 @@ def generate_hosts_json(*, offline: bool = False, quiet: bool = False) -> Path:
     that path caused config drift (netgate's net0 static was being read
     back as internal_ip, which NixOS then re-applied).
 
-    Called by the CLI command and by ``sk deploy nixos`` so external
+    Called by the CLI command and by ``fleet deploy nixos`` so external
     Python consumers (remote.py, reset_connection.py, nixos.py tag
     aggregation) keep seeing a fresh on-disk copy.  The ``offline``
     kwarg is retained for signature compatibility but no longer has

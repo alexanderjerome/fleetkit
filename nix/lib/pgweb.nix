@@ -5,12 +5,12 @@
 # those advertisements into bookmark files.
 #
 # Consumers:
-#   nix/modules/infra/services/postgresql/pgweb-access.nix   (every PG host)
+#   nix/modules/infra/data/postgresql/pgweb-access.nix   (every PG host)
 #     - instanceSecretKey: the SOPS key holding this host's `pgweb`
 #       role password.
-#   nix/modules/infra/services/pgweb/default.nix             (the pgweb LXC)
+#   nix/modules/infra/data/pgweb/default.nix             (the pgweb LXC)
 #     - bookmarksOf: one bookmark TOML per database exported by a PG
-#       node's `infra.postgresql.pgwebAccess`.
+#       node's `infra.data.postgresql.pgwebAccess`.
 #
 # Adding a database to any host that goes through these modules makes
 # it appear in pgweb on the next deploy — no per-host wiring.
@@ -42,7 +42,7 @@ rec {
   #   nodeCfg     that node's evaluated NixOS config
   #   mkPassword  hostName -> password string (placeholder on pgweb host)
   bookmarksOf = { hostName, nodeCfg, mkPassword }:
-    let acc = nodeCfg.infra.postgresql.pgwebAccess;
+    let acc = nodeCfg.infra.data.postgresql.pgwebAccess;
     in map (db: {
       name = bookmarkName hostName db;
       content = mkBookmarkToml {

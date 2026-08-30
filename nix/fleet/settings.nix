@@ -49,7 +49,7 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "hs.example.dev";
-        description = "MagicDNS base domain of the fleet tailnet (headscale base_domain). null ⇒ no tailnet serveUI names; required (asserted) when infra.tailscale.serveUI entries exist.";
+        description = "MagicDNS base domain of the fleet tailnet (headscale base_domain). null ⇒ no tailnet serveUI names; required (asserted) when infra.network.tailnet.serveUI entries exist.";
       };
     };
 
@@ -57,7 +57,7 @@
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "admin@example.com";
-      description = "Email for ACME account registration (internal CA and public Let's Encrypt). null ⇒ no ACME issuance; required (asserted) by infra.caddy and by host-cert when an internal CA is configured.";
+      description = "Email for ACME account registration (internal CA and public Let's Encrypt). null ⇒ no ACME issuance; required (asserted) by infra.ingress and by host-cert when an internal CA is configured.";
     };
 
     adminSshKeys = lib.mkOption {
@@ -71,13 +71,13 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "https://vpn.example.dev";
-        description = "Login/control server URL of the fleet tailnet (headscale). Used as --login-server by infra.tailscale.fleetNode. null ⇒ fleetNode emits no --login-server flag.";
+        description = "Login/control server URL of the fleet tailnet (headscale). Used as --login-server by infra.network.tailnet.fleetNode. null ⇒ fleetNode emits no --login-server flag.";
       };
       preauthKeyUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "https://vpn.example.dev/internal/preauth/fleet-bot";
-        description = "HTTPS endpoint returning a tailnet preauth key as raw text (e.g. a source-IP-gated headscale vhost). Used by infra.tailscale.fleetNode to auto-fetch enrollment keys. null ⇒ hosts fall back to a SOPS-held auth key.";
+        description = "HTTPS endpoint returning a tailnet preauth key as raw text (e.g. a source-IP-gated headscale vhost). Used by infra.network.tailnet.fleetNode to auto-fetch enrollment keys. null ⇒ hosts fall back to a SOPS-held auth key.";
       };
     };
 
@@ -92,7 +92,7 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "https://auth.example.dev";
-        description = "Base URL of the fleet's OIDC identity provider (e.g. Authentik). Required by modules that enable OIDC login (e.g. infra.grafana-stack.oidc).";
+        description = "Base URL of the fleet's OIDC identity provider (e.g. Authentik). Required by modules that enable OIDC login (e.g. infra.observability.stack.oidc).";
       };
     };
 
@@ -101,19 +101,19 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "grafana.example.pve";
-        description = "Domain Grafana serves on (server.domain / root_url). null ⇒ no observability stack; required (asserted) when infra.grafana-stack is enabled.";
+        description = "Domain Grafana serves on (server.domain / root_url). null ⇒ no observability stack; required (asserted) when infra.observability.stack is enabled.";
       };
       prometheusRemoteWriteUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "http://192.0.2.4:9090/api/v1/write";
-        description = "Prometheus remote-write endpoint every fleet host's Alloy agent ships metrics to (usually the grafana-stack host). null (together with lokiPushUrl = null) ⇒ Alloy stays disabled by default fleet-wide; required (asserted) when infra.alloy is enabled.";
+        description = "Prometheus remote-write endpoint every fleet host's Alloy agent ships metrics to (usually the grafana-stack host). null (together with lokiPushUrl = null) ⇒ Alloy stays disabled by default fleet-wide; required (asserted) when infra.observability.alloy is enabled.";
       };
       lokiPushUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "http://192.0.2.4:3100/loki/api/v1/push";
-        description = "Loki push endpoint every fleet host's Alloy agent ships logs to (usually the grafana-stack host). null (together with prometheusRemoteWriteUrl = null) ⇒ Alloy stays disabled by default fleet-wide; required (asserted) when infra.alloy is enabled.";
+        description = "Loki push endpoint every fleet host's Alloy agent ships logs to (usually the grafana-stack host). null (together with prometheusRemoteWriteUrl = null) ⇒ Alloy stays disabled by default fleet-wide; required (asserted) when infra.observability.alloy is enabled.";
       };
       tempoUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -125,7 +125,7 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "http://s3.example.lan:3900";
-        description = "S3-compatible endpoint (e.g. in-fleet Garage) Loki writes chunks and index to. null ⇒ no Loki chunk store; required (asserted) when infra.grafana-stack is enabled.";
+        description = "S3-compatible endpoint (e.g. in-fleet Garage) Loki writes chunks and index to. null ⇒ no Loki chunk store; required (asserted) when infra.observability.stack is enabled.";
       };
       pveScrapeTargets = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
@@ -146,13 +146,13 @@
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "203.0.113.10";
-        description = "Public WAN IP of the fleet edge (stable pointer for public DNS pins). null ⇒ no public-edge features; required (asserted) by infra.acme-dns (glue/apex A records).";
+        description = "Public WAN IP of the fleet edge (stable pointer for public DNS pins). null ⇒ no public-edge features; required (asserted) by infra.pki.acmeDns (glue/apex A records).";
       };
       lanCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "192.0.2.0/24";
-        description = "Fleet LAN CIDR (mirrors fleet.network.internal_cidr for module convenience). null ⇒ modules that default network ACLs from it (e.g. infra.postgresql.allowedSubnets) default to an empty list instead.";
+        description = "Fleet LAN CIDR (mirrors fleet.network.internal_cidr for module convenience). null ⇒ modules that default network ACLs from it (e.g. infra.data.postgresql.allowedSubnets) default to an empty list instead.";
       };
       mgmtCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;

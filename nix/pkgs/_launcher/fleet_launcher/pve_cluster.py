@@ -10,7 +10,7 @@ is excluded — PBS isn't part of a PVE cluster.
 SSH trust model:
 - The sysadmin SSH pubkey is already in every tier-1 host's
   /root/.ssh/authorized_keys (planted at install time via the answer.toml
-  `root-ssh-keys` field rendered by infra.pve-installer-answers).
+  `root-ssh-keys` field rendered by infra.provisioning.pveInstallerAnswers).
 - The operator's ssh-agent is forwarded with `-A`. When a joiner runs
   `pvecm add <founder> --use_ssh`, the internal ssh from joiner→founder
   picks up the forwarded agent and authenticates as the operator's key.
@@ -37,7 +37,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ._util import find_project_root, fleet_cache_dir
+from ._util import find_project_root, fleet_cache_dir, sk_executable
 
 console = Console()
 
@@ -355,7 +355,7 @@ def converge(cluster_name: str, dry_run: bool, yes: bool) -> None:
         console.print(f"  [green]✓[/]")
 
     console.print()
-    console.print("[green]Converge complete. Re-run `sk pve cluster status` to verify.[/]")
+    console.print("[green]Converge complete. Re-run `fleet pve cluster status` to verify.[/]")
 
 
 @cluster.command("issue-tf-token")
@@ -470,12 +470,12 @@ pveum user token add {username} {token_id} --privsep=0 --output-format json
     console.print(f"  ✓ minted token [cyan]{full_token_id}[/]")
 
     # ── Save to SOPS ──────────────────────────────────────
-    # Shell out to `sk devtools secrets keys add` since that already
+    # Shell out to `fleet devtools secrets keys add` since that already
     # handles the SOPS plumbing (age key, file structure, etc.).
     for path, value in [(f"{sops_prefix}/endpoint", endpoint),
                         (f"{sops_prefix}/api_token", api_token)]:
         sk_res = subprocess.run(
-            ["sk", "devtools", "secrets", "keys", "add", path, value],
+            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
         if sk_res.returncode != 0:
@@ -489,4 +489,4 @@ pveum user token add {username} {token_id} --privsep=0 --output-format json
     console.print("[bold]Next:[/bold] wire the provider in nix/fleet/providers/inputs.nix to use:")
     console.print(f'  endpoint = "{endpoint}";')
     console.print(f'  secrets.api_token = "{sops_prefix}/api_token";')
-    console.print("then `sk deploy tf init <stack>` against the new provider instance.")
+    console.print("then `fleet deploy tf init <stack>` against the new provider instance.")

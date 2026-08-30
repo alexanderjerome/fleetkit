@@ -1,0 +1,240 @@
+---
+# attic-rebootstrap — re-key the attic cache against the current Garage
+# instance and reset atticd to a consistent empty state.
+#
+# Module-adjacent to default.nix (infra.build.attic): this playbook is the
+# imperative recovery path for the credentials that module consumes from
+# SOPS (services/attic/garage/{access_key_id,secret_access_key}).
+#
+# When to run: whenever atticd's Garage credentials are stale — e.g.
+# Garage was rebuilt/re-keyed and atticd logs `AccessDenied: No such
+# key: GK...` on uploads. Idempotent: re-running against a healthy
+# pipeline is a no-op apart from the verification push.
+#
+# What it does, in order:
+#   1. Garage host    — ensure the access key exists and owns the cache
+#                       bucket; fetch its id+secret.
+#   2. operator host  — write the pair into SOPS at
+#                       services/attic/garage/{access_key_id,secret_access_key}
+#                       (skipped when already current).
+#   3. builder host   — stop atticd and archive its sqlite (it references
+#                       chunks from the previous Garage instance; the
+#                       cache restarts empty — nothing of value is lost,
+#                       NARs are rebuildable by definition).
+#   4. operator host  — `fleet deploy nixos apply host <builder>` to ship
+#                       the new credentials (sops template re-render +
+#                       atticd restart via restartUnits).
+#   5. builder host   — ensure the cache exists in atticd, then push a
+#                       small store path end-to-end.
+#   6. Garage host    — confirm the bucket actually received objects.
+#
+# Invocation (from the consumer repo root):
+#   fleet ansible run attic-rebootstrap -e attic_cache_name=<cache>
+# Requirements on the controller: repo checkout (cwd = repo root),
+# `sops` + `fleet` on PATH, SOPS age key resolvable (the fleet launcher
+# exports SOPS_AGE_KEY_FILE; ~/.ssh/sops-age.key is the fallback).
+#
+# Variables (see ansible/README.md for the convention):
+#   attic_cache_name       REQUIRED — logical cache name inside atticd;
+#                          mirrors infra.build.attic.cacheName (whose Nix
+#                          default is fleet.settings.name — no generic
+#                          default exists here, so pass it explicitly).
+#   attic_s3_host          inventory hostname of the Garage host
+#                          (default: s3 — the fleet host tagged `s3`).
+#   attic_builder_host     inventory hostname of the atticd/builder host
+#                          (default: nix-builder).
+#   attic_garage_key_name  Garage access key name (default: nix-cache-key,
+#                          matching the attic.nix bootstrap docs).
+#   attic_s3_bucket        Garage bucket holding the NARs (default:
+#                          nix-cache — mirrors infra.build.attic.s3Bucket).
+#   attic_garage_env_file  rendered Garage admin env on the Garage host
+#                          (default: /run/secrets/rendered/garage-env).
+#   fleet_sops_file        SOPS secrets file, relative to the invocation
+#                          cwd (default: nix/secrets/secrets.yaml).
+#
+# NOTE: step 2 modifies the SOPS file in the working tree — review and
+# commit it afterwards (the final play prints a reminder).
+
+- name: Preflight — required variables
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: require attic_cache_name
+      ansible.builtin.assert:
+        that:
+          - attic_cache_name is defined
+        fail_msg: >-
+          attic_cache_name is required — the logical cache name inside
+          atticd (mirrors infra.build.attic.cacheName, which defaults to
+          fleet.settings.name on the Nix side). Pass it with
+          -e attic_cache_name=<name>.
+
+- name: Ensure Garage key + bucket grant for attic (Garage host)
+  hosts: "{{ attic_s3_host | default('s3') }}"
+  gather_facts: false
+  tasks:
+    - name: Ensure the attic Garage key exists
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ attic_garage_env_file | default('/run/secrets/rendered/garage-env') }}; set +a
+        if ! garage key info {{ attic_garage_key_name | default('nix-cache-key') }} >/dev/null 2>&1; then
+          garage key create {{ attic_garage_key_name | default('nix-cache-key') }}
+          echo CREATED
+        else
+          echo EXISTS
+        fi
+      args: { executable: /bin/sh }
+      register: key_ensure
+      changed_when: "'CREATED' in key_ensure.stdout"
+
+    - name: Grant the key full access to the cache bucket
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ attic_garage_env_file | default('/run/secrets/rendered/garage-env') }}; set +a
+        garage bucket allow {{ attic_s3_bucket | default('nix-cache') }} \
+          --read --write --owner --key {{ attic_garage_key_name | default('nix-cache-key') }}
+      args: { executable: /bin/sh }
+      changed_when: false  # allow is a convergent grant; re-runs are no-ops
+
+    - name: Read key id + secret
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ attic_garage_env_file | default('/run/secrets/rendered/garage-env') }}; set +a
+        garage key info {{ attic_garage_key_name | default('nix-cache-key') }} --show-secret \
+          | awk -F': *' '/Key ID/{print "id="$2} /Secret key/{print "secret="$2}'
+      args: { executable: /bin/sh }
+      register: key_info
+      changed_when: false
+      no_log: true
+
+    - name: Stash credentials as facts
+      ansible.builtin.set_fact:
+        attic_access_key_id: "{{ key_info.stdout | regex_search('id=(\\S+)', '\\1') | first }}"
+        attic_secret_access_key: "{{ key_info.stdout | regex_search('secret=(\\S+)', '\\1') | first }}"
+      no_log: true
+
+- name: Write credentials into SOPS (operator host)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _s3_host: "{{ attic_s3_host | default('s3') }}"
+    secrets_file: "{{ fleet_sops_file | default('nix/secrets/secrets.yaml') }}"
+    sops_env:
+      SOPS_AGE_KEY_FILE: >-
+        {{ lookup('env', 'SOPS_AGE_KEY_FILE')
+           | default(lookup('env', 'HOME') + '/.ssh/sops-age.key', true) }}
+  tasks:
+    - name: Read current SOPS value for access_key_id
+      ansible.builtin.command:
+        cmd: sops decrypt --extract '["services"]["attic"]["garage"]["access_key_id"]' {{ secrets_file }}
+      environment: "{{ sops_env }}"
+      register: current_key_id
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Update SOPS attic garage credentials
+      ansible.builtin.command:
+        cmd: >
+          sops set {{ secrets_file }}
+          '["services"]["attic"]["garage"]["{{ item.key }}"]'
+          '"{{ item.value }}"'
+      environment: "{{ sops_env }}"
+      loop:
+        - { key: access_key_id, value: "{{ hostvars[_s3_host].attic_access_key_id }}" }
+        - { key: secret_access_key, value: "{{ hostvars[_s3_host].attic_secret_access_key }}" }
+      when: current_key_id.stdout | default('') != hostvars[_s3_host].attic_access_key_id
+      no_log: true
+
+- name: Reset atticd state (builder host)
+  hosts: "{{ attic_builder_host | default('nix-builder') }}"
+  gather_facts: false
+  vars:
+    _s3_host: "{{ attic_s3_host | default('s3') }}"
+  tasks:
+    - name: Check whether atticd sqlite predates the current Garage key
+      ansible.builtin.stat:
+        path: /var/lib/atticd/server.db
+      register: atticd_db
+
+    - name: Stop atticd and archive stale database
+      when:
+        - atticd_db.stat.exists
+        - hostvars[_s3_host].key_ensure.stdout is search('CREATED')
+      block:
+        - name: Stop atticd
+          ansible.builtin.systemd:
+            name: atticd
+            state: stopped
+        - name: Archive sqlite (references chunks from the old Garage instance)
+          ansible.builtin.command:
+            cmd: mv /var/lib/atticd/server.db /var/lib/atticd/server.db.pre-rebootstrap
+            removes: /var/lib/atticd/server.db
+
+- name: Ship new credentials via colmena (operator host)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Deploy the builder host (re-renders sops templates, restarts atticd)
+      ansible.builtin.command:
+        cmd: fleet deploy nixos apply host {{ attic_builder_host | default('nix-builder') }}
+        chdir: "{{ fleet_repo_root | default('.') }}"
+
+- name: Create cache + verify end-to-end (builder host)
+  hosts: "{{ attic_builder_host | default('nix-builder') }}"
+  gather_facts: false
+  environment:
+    XDG_CONFIG_HOME: /etc   # attic-client only reads $XDG_CONFIG_HOME/attic/config.toml
+    HOME: /root
+  tasks:
+    - name: Ensure the cache exists
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if attic cache info {{ attic_cache_name }} >/dev/null 2>&1; then
+          echo EXISTS
+        else
+          attic cache create {{ attic_cache_name }}
+          echo CREATED
+        fi
+      args: { executable: /bin/sh }
+      register: cache_ensure
+      changed_when: "'CREATED' in cache_ensure.stdout"
+
+    - name: Push a small store path through the pipeline
+      ansible.builtin.shell: |
+        set -euo pipefail
+        attic push {{ attic_cache_name }} "$(nix config show post-build-hook)"
+      args: { executable: /bin/sh }
+      register: test_push
+      changed_when: false
+
+    - name: Push must not report failures
+      ansible.builtin.assert:
+        that:
+          - "'InternalServerError' not in test_push.stdout"
+          - "'Unauthorized' not in test_push.stdout"
+        fail_msg: >-
+          attic push failed — check atticd logs on
+          {{ attic_builder_host | default('nix-builder') }}: {{ test_push.stdout }}
+
+- name: Confirm objects landed in Garage (Garage host)
+  hosts: "{{ attic_s3_host | default('s3') }}"
+  gather_facts: false
+  tasks:
+    - name: Read cache bucket stats
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ attic_garage_env_file | default('/run/secrets/rendered/garage-env') }}; set +a
+        garage bucket info {{ attic_s3_bucket | default('nix-cache') }} | grep -E 'Objects|Size'
+      args: { executable: /bin/sh }
+      register: bucket_stats
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "{{ attic_s3_bucket | default('nix-cache') }} bucket after verification push: {{ bucket_stats.stdout_lines }}"
+          - "REMINDER: {{ fleet_sops_file | default('nix/secrets/secrets.yaml') }} changed in the working tree — review and commit it."

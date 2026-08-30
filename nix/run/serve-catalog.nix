@@ -1,6 +1,6 @@
 # nix/run/serve-catalog.nix — tailnet serveUI catalog (ADR-036).
 #
-# Walks every host's `infra.tailscale.serveUI` and emits the browser-trusted
+# Walks every host's `infra.network.tailnet.serveUI` and emits the browser-trusted
 # tailnet URLs they declare. Pure eval — desired state, not liveness; a URL
 # here only means the host is *configured* to serve it, not that it's up.
 #
@@ -14,7 +14,7 @@ let
   # One flat list of entries across the whole fleet, enabled UIs only.
   entries = lib.concatLists (lib.mapAttrsToList (hostName: hostCfg:
     let
-      ts       = hostCfg.config.infra.tailscale or {};
+      ts       = hostCfg.config.infra.network.tailnet or {};
       domain   = let d = ts.serveUIDomain or (hostCfg.config.fleet.settings.domain.tailnetSuffix or "");
                  in if d == null then "" else d;
       fqdn     = "${hostName}.${domain}";

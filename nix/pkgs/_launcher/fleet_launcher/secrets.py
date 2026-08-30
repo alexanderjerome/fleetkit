@@ -7,7 +7,6 @@ Commands:
     keys add          Add or update a key
     keys rm           Remove a key
     keys replace      Replace an existing key's value
-    sync-infisical    Mirror secrets.yaml into Infisical (one-way, reconciling)
 """
 from __future__ import annotations
 
@@ -382,7 +381,7 @@ def keys_list(secrets_file: str | None):
 def keys_add(key_path: str, value: str, secrets_file: str | None):
     """Add or set a secret key.
 
-    KEY_PATH is slash-separated (e.g., bitcoin/rpc_user).
+    KEY_PATH is slash-separated (e.g., services/grafana/admin_password).
     VALUE is the plaintext secret value.
     """
     sf = secrets_file or _find_secrets_file()
@@ -397,7 +396,7 @@ def keys_add(key_path: str, value: str, secrets_file: str | None):
 def keys_rm(key_path: str, secrets_file: str | None, yes: bool):
     """Remove a secret key.
 
-    KEY_PATH is slash-separated (e.g., analytics/ordinals_password).
+    KEY_PATH is slash-separated (e.g., services/grafana/admin_password).
     """
     sf = secrets_file or _find_secrets_file()
     if not yes:
@@ -413,7 +412,7 @@ def keys_rm(key_path: str, secrets_file: str | None, yes: bool):
 def keys_replace(key_path: str, new_value: str, secrets_file: str | None):
     """Replace an existing secret key's value.
 
-    KEY_PATH is slash-separated (e.g., bitcoin/rpc_password).
+    KEY_PATH is slash-separated (e.g., services/grafana/admin_password).
     NEW_VALUE is the new plaintext value.
     """
     sf = secrets_file or _find_secrets_file()
@@ -435,112 +434,3 @@ def keys_replace(key_path: str, new_value: str, secrets_file: str | None):
 
     _sops_set(sf, key_path, new_value)
     console.print(f"[green]Replaced:[/green] {key_path}")
-
-
-@secrets.command("sync-infisical")
-@click.option("--file", "secrets_file", default=None,
-              help="Override path to secrets.yaml.")
-@click.option("--dry-run", is_flag=True,
-              help="Compute diff against live Infisical state but do not apply.")
-@click.option("--project-id", default=None,
-              help="Override Infisical project ID (else read from SOPS).")
-@click.option("--site-url", default=None,
-              help="Override Infisical site URL (else read from SOPS or default).")
-@click.option("--environment", default="prod", show_default=True,
-              help="Infisical environment slug.")
-def secrets_sync_infisical(
-    secrets_file: str | None,
-    dry_run: bool,
-    project_id: str | None,
-    site_url: str | None,
-    environment: str,
-):
-    """Sync secrets.yaml → Infisical (one-way, reconciling).
-
-    SOPS remains the source of truth. Infisical is a downstream read replica.
-    Any direct edits in Infisical are overwritten on the next sync.
-
-    Configuration lives under ``integrations.infisical`` in secrets.yaml:
-      - sync_client_id      Universal Auth client ID for the sync machine identity
-      - sync_client_secret  Universal Auth client secret
-      - project_id          Infisical project ID (UUID)
-      - site_url            Base URL of your Infisical instance (or --site-url)
-
-    The /integrations/infisical and /services/infisical subtrees are excluded
-    from the sync (self-referential — see infisical_sync.EXCLUDED_PATHS).
-    """
-    try:
-        from infisical_sdk import InfisicalSDKClient
-    except ImportError:
-        console.print(
-            "[red]ERROR:[/red] infisicalsdk not installed. "
-            "Run `uv sync` inside `nix develop` to install."
-        )
-        sys.exit(1)
-
-    import yaml
-    from .infisical_sync import sync as run_sync
-
-    sf = secrets_file or _find_secrets_file()
-    _ensure_age_key()
-    plaintext = _sops_decrypt_to_string(sf)
-    data = yaml.safe_load(plaintext)
-
-    cfg = (data.get("integrations", {}) or {}).get("infisical", {}) or {}
-    client_id = cfg.get("sync_client_id")
-    client_secret = cfg.get("sync_client_secret")
-    resolved_site = site_url or cfg.get("site_url")
-    resolved_project = project_id or cfg.get("project_id")
-
-    missing = []
-    if not client_id:
-        missing.append("integrations/infisical/sync_client_id")
-    if not client_secret:
-        missing.append("integrations/infisical/sync_client_secret")
-    if not resolved_project:
-        missing.append("integrations/infisical/project_id (or --project-id)")
-    if not resolved_site:
-        missing.append("integrations/infisical/site_url (or --site-url)")
-    if missing:
-        console.print("[red]ERROR:[/red] missing required config:")
-        for m in missing:
-            console.print(f"  - {m}")
-        console.print(
-            "\n[dim]Create an Infisical project + machine identity, then add these "
-            "via `sk devtools secrets keys add`.[/dim]"
-        )
-        sys.exit(1)
-
-    console.print(f"[dim]Site:[/dim]        {resolved_site}")
-    console.print(f"[dim]Project:[/dim]     {resolved_project}")
-    console.print(f"[dim]Environment:[/dim] {environment}")
-    console.print()
-
-    client = InfisicalSDKClient(host=resolved_site)
-    try:
-        client.auth.universal_auth.login(
-            client_id=client_id,
-            client_secret=client_secret,
-        )
-    except Exception as e:
-        console.print(f"[red]ERROR:[/red] Infisical auth failed: {e}")
-        sys.exit(1)
-
-    try:
-        diff = run_sync(
-            sops_data=data,
-            client=client,
-            project_id=resolved_project,
-            environment=environment,
-            dry_run=dry_run,
-        )
-    except Exception as e:
-        console.print(f"[red]ERROR:[/red] sync failed: {e}")
-        sys.exit(1)
-
-    if dry_run and not diff.is_empty:
-        console.print()
-        console.print(
-            "[dim]Dry run — no changes applied. "
-            "Re-run without --dry-run to apply.[/dim]"
-        )

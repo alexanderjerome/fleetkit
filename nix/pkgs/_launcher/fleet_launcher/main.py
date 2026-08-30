@@ -6,7 +6,7 @@ Usage:
     fleet deploy ...       -> Deployment pipelines (nixos / tf)
     fleet inventory ...    -> Host inventory management
     fleet remote ...       -> Run commands on fleet hosts via SSH or pct exec
-    fleet bootstraps ...   -> One-time setup (hiro / pve / step-ca)
+    fleet bootstraps ...   -> One-time setup (pve / step-ca)
     fleet devtools ...     -> Secrets, utilities
 """
 from __future__ import annotations
@@ -55,7 +55,6 @@ from fleet_launcher.devtools_group import devtools
 from fleet_launcher.remote import remote
 from fleet_launcher.sessions import sessions_cli
 from fleet_launcher.pki_group import pki
-from fleet_launcher.catalog_group import catalog
 from fleet_launcher.ansible_group import ansible as ansible_cli
 from fleet_launcher.mcp_group import mcp as mcp_cli
 
@@ -79,7 +78,7 @@ def fleet(ctx: click.Context) -> None:
       deploy       Deployment pipelines (nixos / tf)
       inventory    Host inventory generation and management
       remote       Run commands on fleet hosts (SSH or pct exec)
-      bootstraps   One-time setup (hiro/pve/step-ca)
+      bootstraps   One-time setup (pve/step-ca)
       devtools     Secrets, utilities
     """
     if ctx.invoked_subcommand is None:
@@ -100,13 +99,12 @@ fleet.add_command(devtools)
 fleet.add_command(remote)
 fleet.add_command(sessions_cli, "sessions")
 fleet.add_command(pki)
-fleet.add_command(catalog)
 fleet.add_command(ansible_cli, "ansible")
 
 from .xoa_group import xoa as _xoa
 fleet.add_command(_xoa)
 
-# `sk pve` carries Proxmox VE host-management subcommands. The legacy
+# `fleet pve` carries Proxmox VE host-management subcommands. The legacy
 # install-nix / build-template ops in pve.py live alongside the newer
 # `cluster` group for cluster lifecycle (pvecm create/add).
 from .pve import pve as _pve
@@ -114,12 +112,12 @@ from .pve_cluster import cluster as _pve_cluster
 _pve.add_command(_pve_cluster)
 fleet.add_command(_pve)
 
-# `sk pbs` — Proxmox Backup Server operator commands. Single-host
+# `fleet pbs` — Proxmox Backup Server operator commands. Single-host
 # product (no cluster), so no nested `cluster` group.
 from .pbs import pbs as _pbs
 fleet.add_command(_pbs)
 
-# `sk s3` — Garage / object-store operator commands (mint-key, etc.).
+# `fleet s3` — Garage / object-store operator commands (mint-key, etc.).
 from .s3 import s3 as _s3
 fleet.add_command(_s3)
 
@@ -261,9 +259,8 @@ def _setup_env() -> None:
         pass
 
     # XCP-ng / XOA credentials — REST API for VM IP discovery during
-    # `sk inventory generate` (XCP-ng VMs DHCP their NICs, so static IPs
-    # aren't declarable in fleet.nix; we patch them in from live XOA).
-    # SKRYBITDEV-618.
+    # `fleet inventory generate` (XCP-ng VMs DHCP their NICs, so static IPs
+    # aren't declarable in the fleet manifest; we patch them in from live XOA).
     try:
         result = subprocess.run(
             [sops, "-d", "--extract", '["integrations"]["xen-orchestra"]', secrets_file],
@@ -291,14 +288,14 @@ def _setup_env() -> None:
 
 
 def _maybe_reexec_for_missing_tools() -> None:
-    """Re-exec sk inside `nix develop` when required external tools are absent.
+    """Re-exec fleet inside `nix develop` when required external tools are absent.
 
-    INFRA-171: the devshell provides colmena/tofu but not `sk` (venv editable
-    install); the venv provides `sk` but not colmena/tofu. Non-interactive
+    The devshell provides colmena/tofu but not `fleet` (venv editable
+    install); the venv provides `fleet` but not colmena/tofu. Non-interactive
     contexts (CI, agents, tmux relaunch) routinely get one half only. When a
     deploy-family command is invoked and its wrapped tool is missing from
-    PATH, transparently re-exec this same sk binary through `nix develop` so
-    both halves are present.
+    PATH, transparently re-exec this same fleet binary through `nix develop`
+    so both halves are present.
 
     Opt-out: SK_NO_REEXEC=1. Loop guard: SK_REEXECED=1.
     """
@@ -319,14 +316,14 @@ def _maybe_reexec_for_missing_tools() -> None:
         return
     if shutil.which("nix") is None:
         sys.stderr.write(
-            f"sk: required tool(s) missing from PATH ({', '.join(missing)}) "
+            f"fleet: required tool(s) missing from PATH ({', '.join(missing)}) "
             f"and `nix` unavailable to re-enter the devshell — this will fail.\n")
         return
 
     from ._util import find_project_root, sk_executable
     root = find_project_root()
     sys.stderr.write(
-        f"sk: {', '.join(missing)} not on PATH — re-entering devshell "
+        f"fleet: {', '.join(missing)} not on PATH — re-entering devshell "
         f"(nix develop {root})…\n")
     os.environ["SK_REEXECED"] = "1"
     os.execvp("nix", ["nix", "develop", str(root), "--command",

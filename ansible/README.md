@@ -101,8 +101,8 @@ to ship.
 
 Operational playbooks that belong to a specific NixOS module live *next
 to that module* in `nix/modules/` instead of this tree — e.g.
-`nix/modules/infra/services/builder/attic-rebootstrap.yml` sits beside
-`attic.nix`, whose SOPS credentials it re-mints. They are discovered by
+`nix/modules/infra/build/attic/attic-rebootstrap.yml` sits beside
+its module (`default.nix`), whose SOPS credentials it re-mints. They are discovered by
 globbing `nix/modules/**/*.yml` in the framework tree (via
 `$FLEET_MODULES_DIR`, baked into the Nix-built launcher, with a
 repo-relative fallback) and resolve by bare stem at the **lowest**
@@ -122,11 +122,11 @@ trees. `attic-rebootstrap` variables:
 
 | Ansible variable | Counterpart | Required? |
 |---|---|---|
-| `attic_cache_name` | `infra.builder.attic.cacheName` (Nix default: `fleet.settings.name`) | **yes** (assert) |
+| `attic_cache_name` | `infra.build.attic.cacheName` (Nix default: `fleet.settings.name`) | **yes** (assert) |
 | `attic_s3_host` | inventory hostname of the Garage host | default `s3` |
 | `attic_builder_host` | inventory hostname of the atticd builder | default `nix-builder` |
-| `attic_garage_key_name` | attic.nix bootstrap key name | default `nix-cache-key` |
-| `attic_s3_bucket` | `infra.builder.attic.s3Bucket` | default `nix-cache` |
+| `attic_garage_key_name` | attic module bootstrap key name | default `nix-cache-key` |
+| `attic_s3_bucket` | `infra.build.attic.s3Bucket` | default `nix-cache` |
 | `attic_garage_env_file` | rendered Garage admin env on the Garage host | default `/run/secrets/rendered/garage-env` |
 | `fleet_sops_file` | SOPS secrets file (relative to invocation cwd) | default `nix/secrets/secrets.yaml` |
 

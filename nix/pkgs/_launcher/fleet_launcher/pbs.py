@@ -1,12 +1,12 @@
 """fleet pbs — Proxmox Backup Server operator helpers.
 
-Mirrors the `sk pve cluster issue-tf-token` flow for the PBS host: mints
+Mirrors the `fleet pve cluster issue-tf-token` flow for the PBS host: mints
 an API token via `proxmox-backup-manager`, saves to SOPS, and pairs with
 the fleet.providers.proxmox-backup-server.<instance> declaration in
 nix/fleet/providers/inputs.nix.
 
 PBS has no cluster concept (single-host product), so this lives at
-`sk pbs ...` rather than `sk pbs cluster ...`.
+`fleet pbs ...` rather than `fleet pbs cluster ...`.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import time
 import click
 from rich.console import Console
 
-from ._util import find_project_root, fleet_cache_dir
+from ._util import find_project_root, fleet_cache_dir, sk_executable
 from .pve_api import get_host as get_pve_host
 
 console = Console()
@@ -198,7 +198,7 @@ proxmox-backup-manager user generate-token {username} {token_id}
     for path, value in [(f"{sops_prefix}/endpoint", endpoint),
                         (f"{sops_prefix}/api_token", api_token)]:
         sk_res = subprocess.run(
-            ["sk", "devtools", "secrets", "keys", "add", path, value],
+            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
         if sk_res.returncode != 0:
@@ -219,7 +219,7 @@ proxmox-backup-manager user generate-token {username} {token_id}
               help="vzdump mode. snapshot = no downtime (LVM-thin snapshot).")
 @click.option("--exclude-path", "exclude_paths", multiple=True,
               help="Path to exclude from the backup (repeatable), e.g. /data/nbxplorer.")
-@click.option("--notes", default="{{guestname}} — sk pbs backup", show_default=True,
+@click.option("--notes", default="{{guestname}} — fleet pbs backup", show_default=True,
               help="vzdump notes-template for the snapshot.")
 @click.option("--pve-host", "pve_host_override", default=None,
               help="Cluster node IP to query (default: PROXMOX_VE_ENDPOINT).")
@@ -234,9 +234,9 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
 
     \b
     Examples:
-        sk pbs backup indexer-mainnet
-        sk pbs backup indexer-mainnet --exclude-path /data/nbxplorer
-        sk pbs backup btc-mainnet --mode snapshot -y
+        fleet pbs backup analytics-db
+        fleet pbs backup analytics-db --exclude-path /data/scratch
+        fleet pbs backup app-db --mode snapshot -y
     """
     hosts = _load_hosts()
     if host_name not in hosts:

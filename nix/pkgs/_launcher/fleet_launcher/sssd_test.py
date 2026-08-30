@@ -1,4 +1,4 @@
-"""sk devtools sssd-test — end-to-end directory-auth probe (INFRA-199).
+"""fleet devtools sssd-test — end-to-end directory-auth probe (INFRA-199).
 
 Logs into a fleet host as the `sssd-probe` service user using the SSH key
 served FROM the directory (Authentik attributes.sshPublicKey → LDAP outpost
@@ -52,7 +52,7 @@ def _resolve_host_ip(host_name: str) -> str:
 
 
 @click.command("sssd-test")
-@click.argument("host", default="dash")
+@click.argument("host")
 def sssd_test(host: str):
     """Probe directory auth end-to-end by SSHing to HOST as sssd-probe.
 

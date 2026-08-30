@@ -87,22 +87,22 @@ def _write_errors_log(clean_log: Path) -> tuple[Path, bool] | None:
 
 
 def sk_executable() -> str:
-    """Absolute path to the currently-running `sk` entry point.
+    """Absolute path to the currently-running `fleet` entry point.
 
-    Used when sk needs to re-invoke itself (tmux sessions, `nix develop`
-    re-exec) — a bare "sk" on PATH is not reliable in non-interactive
-    contexts (tmux server env, CI, devshell-without-venv). INFRA-171.
+    Used when fleet needs to re-invoke itself (tmux sessions, `nix develop`
+    re-exec) — a bare binary name on PATH is not reliable in
+    non-interactive contexts (tmux server env, CI, devshell-without-venv).
     """
     exe = sys.argv[0]
     if not os.path.isfile(exe):
-        found = shutil.which(exe) or shutil.which("sk")
+        found = shutil.which(exe) or shutil.which("fleet")
         if found:
             exe = found
     return os.path.abspath(exe)
 
 
 def find_project_root() -> Path:
-    """Locate the deployments-pve project root.
+    """Locate the consumer repo root.
 
     Tries git rev-parse first, then walks up looking for flake.nix.
     """

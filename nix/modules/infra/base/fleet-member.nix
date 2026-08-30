@@ -210,7 +210,7 @@ in
     # ── Telemetry agent ──────────────────────────────────────────
     # On by default only when the fleet actually declares telemetry
     # sinks — a fleet without an observability stack keeps Alloy off.
-    infra.alloy.enable = lib.mkDefault
+    infra.observability.alloy.enable = lib.mkDefault
       (config.fleet.settings.observability.prometheusRemoteWriteUrl != null
        && config.fleet.settings.observability.lokiPushUrl != null);
 

@@ -16,8 +16,8 @@ from .reset_connection import reset_connection
 def devtools():
     """Secrets and developer utilities.
 
-    Groups SOPS secret management, Jupyter notebook server, and
-    miscellaneous build helpers.
+    Groups SOPS secret management, connection-reset tooling, the
+    directory-auth probe, and miscellaneous build helpers.
     """
 
 

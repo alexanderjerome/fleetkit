@@ -29,6 +29,6 @@ packages.x86_64-linux.my-xcpng-template =
   };
 ```
 
-Fleets that enable `infra.builder.lxcTemplateFactory` never build images by
+Fleets that enable `infra.build.lxcTemplateFactory` never build images by
 hand — the module consumes the Proxmox builder directly, passing
 `fleet.network.sysadmin_ssh_key`.

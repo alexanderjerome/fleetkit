@@ -18,6 +18,18 @@ from pathlib import Path
 # fleet.* second components rendered as manifest chapters, in this order.
 FLEET_ORDER = ["settings", "network", "compute", "providers", "resources"]
 
+# infra.* second components (strata) rendered as module chapters, in this
+# order: strata first (mirroring nix/modules/infra/<stratum>/), then the
+# always-on base groups.
+INFRA_ORDER = ["network", "ingress", "pki", "observability", "data", "build",
+               "auth", "provisioning", "integrations",
+               "services", "networking", "platform"]
+
+# Strata whose pages nest one section per module (infra.<stratum>.<module>).
+# The rest (infra.ingress, the base groups) are a single flat option tree.
+NESTED_STRATA = {"network", "pki", "observability", "data", "build",
+                 "auth", "provisioning", "integrations"}
+
 
 def md_escape_anchor(name: str) -> str:
     return name.replace("<", "_").replace(">", "_").replace(".", "").replace("*", "_").lower()
@@ -86,21 +98,33 @@ def main(options_json: str, src_dir: str) -> None:
             continue
         groups[g][name] = o
 
-    # Emit one page per group.
+    # Emit one page per group. Infra strata pages get one section per
+    # module (infra.<stratum>.<module>) so the strata stay navigable.
     for (chapter, group), items in groups.items():
         d = src / chapter
         d.mkdir(parents=True, exist_ok=True)
         page = [f"# {chapter}.{group}\n"]
         page.append(f"*{len(items)} options*\n")
-        for name, o in items.items():
-            page.append(render_option(name, o))
+        if chapter == "infra" and group in NESTED_STRATA:
+            current_module = None
+            for name, o in items.items():
+                module = name.split(".")[2]
+                if module != current_module:
+                    page.append(f"## `infra.{group}.{module}`\n")
+                    current_module = module
+                page.append(render_option(name, o))
+        else:
+            for name, o in items.items():
+                page.append(render_option(name, o))
         (d / f"{group}.md").write_text("\n".join(page))
 
     # Index pages.
     fleet_groups = [g for (c, g) in groups if c == "fleet"]
     fleet_sorted = [g for g in FLEET_ORDER if g in fleet_groups] + sorted(
         g for g in fleet_groups if g not in FLEET_ORDER)
-    infra_sorted = sorted(g for (c, g) in groups if c == "infra")
+    infra_groups = [g for (c, g) in groups if c == "infra"]
+    infra_sorted = [g for g in INFRA_ORDER if g in infra_groups] + sorted(
+        g for g in infra_groups if g not in INFRA_ORDER)
 
     def index_page(chapter: str, title: str, blurb: str, names: list[str]) -> None:
         lines = [f"# {title}\n", blurb, ""]
@@ -114,8 +138,9 @@ def main(options_json: str, src_dir: str) -> None:
                "Consumers set these in the modules passed to `mkFleet`.",
                fleet_sorted)
     index_page("infra", "Infra modules",
-               "NixOS service modules every fleet host can enable. "
-               "Each module reads its site values from `fleet.settings.*`.",
+               "NixOS service modules every fleet host can enable, grouped "
+               "into strata (`infra.<stratum>.<module>`). Each module reads "
+               "its site values from `fleet.settings.*`.",
                infra_sorted)
 
     # SUMMARY.md drives mdBook's sidebar — fully generated.

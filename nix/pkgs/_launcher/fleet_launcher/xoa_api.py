@@ -1,4 +1,4 @@
-"""XOA REST API client — read-only discovery for `sk inventory generate`.
+"""XOA REST API client — read-only discovery for `fleet inventory generate`.
 
 XCP-ng VMs DHCP their NICs (the Vates provider's `xenorchestra_vm`
 doesn't have a Proxmox-style `ipconfig0` static-IP injection
@@ -116,7 +116,7 @@ def discover_xo_ips(
         `internal_network_uuid` is provided.
 
     Never overwrites a non-empty declared value — that's a drift signal
-    for `sk inventory diff` to surface, not something this generator
+    for `fleet inventory diff` to surface, not something this generator
     should silently clobber.
     """
     xo_entries = [

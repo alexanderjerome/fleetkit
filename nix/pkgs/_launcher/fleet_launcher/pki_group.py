@@ -9,14 +9,14 @@ host's Caddy then solves Let's Encrypt DNS-01 for `<host>.<domains.base>` with
 this low-privilege credential (it can write only its own challenge record).
 
 Runtime prerequisites (this command talks to a LIVE acme-dns):
-  - acme-dns running on the edge (infra.acme-dns.enable) and its update API
+  - acme-dns running on the edge (infra.pki.acmeDns.enable) and its update API
     reachable from where you run this (fleet.toml [pki].acme_dns_api_base,
     e.g. "http://192.0.2.100:8081", or --api-base).
   - SOPS age key available (fleet.toml [sops].age_key_file) to write the credential.
 
 After registering, add the printed `<host> = "<fulldomain>";` line to
 `acmeDnsDelegations` in nix/fleet/dns/inputs.nix (emits the _acme-challenge
-CNAME), set `infra.caddy.devCertIssuer = "acmedns"` on the host, then deploy.
+CNAME), set `infra.ingress.devCertIssuer = "acmedns"` on the host, then deploy.
 """
 from __future__ import annotations
 
@@ -118,6 +118,6 @@ def register(host: str, api_base: str | None, restrict: bool) -> None:
     console.print("  1. Add the delegation CNAME source — in "
                   "[cyan]nix/fleet/dns/inputs.nix[/cyan] → [cyan]acmeDnsDelegations[/cyan]:")
     console.print(f'       [green]{host}[/green] = "[green]{fulldomain}[/green]";')
-    console.print("  2. Set [cyan]infra.caddy.devCertIssuer = \"acmedns\";[/cyan] on the host.")
-    console.print("  3. [cyan]sk deploy tf apply platform.dns[/cyan] (emit the CNAME) then "
-                  "[cyan]sk deploy nixos apply host " + host + "[/cyan].")
+    console.print("  2. Set [cyan]infra.ingress.devCertIssuer = \"acmedns\";[/cyan] on the host.")
+    console.print("  3. [cyan]fleet deploy tf apply platform.dns[/cyan] (emit the CNAME) then "
+                  "[cyan]fleet deploy nixos apply host " + host + "[/cyan].")

@@ -1,4 +1,4 @@
-"""fleet sessions — tmux-based session management for long-running `sk` ops.
+"""fleet sessions — tmux-based session management for long-running fleet ops.
 
 Any command that might run for more than ~30s (Colmena deploys, `tofu
 apply`, fleet-wide NixOS rollouts) wraps itself in a detached tmux session
@@ -10,7 +10,7 @@ so the operator can:
 
 Session naming convention: ``sk-<family>-<target>`` (e.g.
 ``sk-deploy-netgate``, ``sk-tf-apply-platform-bootstrap``). Prefix
-``sk-`` lets us find all sk-owned sessions with a single glob.
+``sk-`` lets us find all fleet-owned sessions with a single glob.
 
 Opt out via ``--no-session`` on any supporting command or the
 ``SK_NO_SESSION=1`` env var (for CI / scripts).
@@ -138,7 +138,7 @@ def dispatch_session(
             console.print(
                 f"[red]ERROR:[/red] session [bold]{session_name}[/bold] is already running.\n"
                 f"  attach:  tmux attach -t {session_name}\n"
-                f"  kill:    sk sessions kill {session_name}"
+                f"  kill:    fleet sessions kill {session_name}"
             )
             return 2
         # Dead pane — clean up before relaunching.
@@ -215,12 +215,12 @@ def dispatch_session(
     console.print(
         f"[green]launched[/green] {session_name}  "
         f"[dim](attach: tmux attach -t {session_name} · "
-        f"status: sk sessions status · kill: sk sessions kill {session_name})[/dim]"
+        f"status: fleet sessions status · kill: fleet sessions kill {session_name})[/dim]"
     )
     return 0
 
 
-# ── Public CLI (sk sessions …) ───────────────────────────────────────
+# ── Public CLI (fleet sessions …) ───────────────────────────────────────
 
 @dataclass
 class _SessionInfo:
@@ -263,7 +263,7 @@ def _collect_sessions(prefix: str = "sk-") -> list[_SessionInfo]:
 
 @click.group("sessions")
 def sessions_cli() -> None:
-    """Manage sk-owned tmux sessions."""
+    """Manage fleet-owned tmux sessions."""
 
 
 @sessions_cli.command("list")

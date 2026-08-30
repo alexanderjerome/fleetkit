@@ -44,7 +44,7 @@ input and describe their fleet as data.
 ## Discovering the API
 
 - `nix build .#docs` → options reference site (chapters per option group:
-  `fleet/*`, `infra/<module>`), generated from the module declarations —
+  `fleet/*`, `infra/<stratum>`), generated from the module declarations —
   it cannot drift from the code.
 - `nix build .#options-json` → the same option data as structured JSON
   (name, type, default, description, declaring file) — the preferred surface
@@ -66,7 +66,7 @@ input and describe their fleet as data.
   itself.
 - Observability MCP endpoints (Grafana, Tempo, …) are consumer concerns —
   their URLs come from that fleet's `fleet.settings.observability.*`. The
-  `infra.mcp` module lets a fleet declare in-fleet MCP servers per host.
+  `infra.integrations.mcp` module lets a fleet declare in-fleet MCP servers per host.
 
 ## Contribution shape
 

@@ -3,8 +3,8 @@
 # Usage (from a host's hostsRegistry / any module under nix/modules/*/):
 #   let mcpLib = import ../../lib/mcp.nix { inherit lib pkgs; };
 #   in {
-#     infra.mcp.enable = true;
-#     infra.mcp.servers.postgres = mcpLib.mkMCP {
+#     infra.integrations.mcp.enable = true;
+#     infra.integrations.mcp.servers.postgres = mcpLib.mkMCP {
 #       package = pkgs.postgres-mcp;          # or: command = "...";
 #       args    = [ "--access-mode" "restricted" ];
 #       port    = 9110;
@@ -13,7 +13,7 @@
 #     };
 #   }
 #
-# `mkMCP` returns one `infra.mcp.servers.<name>` submodule value — it is thin
+# `mkMCP` returns one `infra.integrations.mcp.servers.<name>` submodule value — it is thin
 # sugar over that submodule (defaults + light validation), mirroring the
 # sopsLib.mk* helpers. The module (nix/modules/mcp/default.nix) does the real
 # work: a systemd service per server, stdio→SSE bridging via mcp-proxy, and
@@ -22,7 +22,7 @@
 { lib, pkgs }:
 
 {
-  # Build one infra.mcp.servers.<name> entry.
+  # Build one infra.integrations.mcp.servers.<name> entry.
   #
   #   package      A package whose main program is the MCP server. Either this
   #                or `command` is required; `package` wins if both are set.

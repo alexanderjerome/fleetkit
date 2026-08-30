@@ -33,11 +33,6 @@ internal_cidr = "192.0.2.0/24"
 # acme-dns update API on your edge host — for `fleet pki acme-dns register`.
 # acme_dns_api_base = "http://192.0.2.100:8081"
 
-# [catalog]
-# Only needed for `fleet catalog ...` (platform_catalog on your app-db host).
-# app_db_ip = "192.0.2.226"
-# rabbitmq_mgmt_url = "http://192.0.2.213:15672"   # or FLEET_RABBITMQ_MGMT_URL env
-
 # [pve.install]
 # Only needed for `fleet deploy pve install` (unattended PVE installs via XOA).
 # serve_host = "192.0.2.50"          # this workstation, as reachable FROM XOA

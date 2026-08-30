@@ -1,4 +1,4 @@
-"""`sk xoa` — thin shim over the standalone xoa-cli package (INFRA-172).
+"""`fleet xoa` — thin shim over the standalone xoa-cli package (INFRA-172).
 
 The XOA operator commands were split out of the launcher into
 nix/pkgs/xoa-cli (flake package `xoa-cli`) so nix config / fleet tooling /
@@ -6,7 +6,7 @@ the INFRA-166 MCP endpoint can call them without the whole fleet CLI.
 
 Preferred path: `xoa_cli` is installed in the venv (uv source in the root
 pyproject.toml) and its click group is re-exported here unchanged, so every
-`sk xoa <cmd>` keeps working. Fallback: if the import is unavailable (stale
+`fleet xoa <cmd>` keeps working. Fallback: if the import is unavailable (stale
 venv), forward the invocation to `nix run .#xoa-cli --`.
 
 Command surface (see xoa_cli.main): list-srs, list-networks,
