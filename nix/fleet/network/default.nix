@@ -12,11 +12,13 @@
       uri = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
+        example = "ldap://auth.example.internal:389";
         description = "Authentik LDAP outpost URI (used by sssd + Proxmox realm). null ⇒ no LDAP directory; required (asserted) when infra.sssd is enabled.";
       };
       base_dn = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
+        example = "dc=ldap,dc=example,dc=com";
         description = "LDAP base DN for user/group searches. null ⇒ no LDAP directory; required (asserted) when infra.sssd is enabled.";
       };
       user_ou = lib.mkOption {
@@ -59,6 +61,7 @@
     internal_resolvers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
+      example = [ "192.0.2.103" ];
       description = ''
         [] (default) ⇒ no fleet DNS: fleet links carry no per-link DNS
         and hosts fall back to systemd-resolved defaults. Set to your
@@ -81,11 +84,13 @@
     dns_domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "example.internal";
       description = "Internal search domain. null ⇒ no internal zone: fleet links pin no search domain, provisioned guests get no create-time DNS domain, and infra.dhcp (asserted) needs an explicit domain.";
     };
 
     search_domains = lib.mkOption {
       type = lib.types.listOf lib.types.str;
+      defaultText = lib.literalExpression "lib.optional (config.fleet.network.dns_domain != null) config.fleet.network.dns_domain";
       example = [ "example.pve" "example.dev" ];
       description = ''
         DNS zones pinned as systemd-resolved routing domains on single-NIC
@@ -100,6 +105,7 @@
 
     sysadmin_ssh_key = lib.mkOption {
       type = lib.types.str;
+      example = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExa sysadmin@example.com";
       description = "sysadmin SSH public key — baked into every CT/VM by nix/images/bootstrap.nix and referenced by Colmena. REQUIRED BY THE PROVISIONING LAYER — rendering any provider stack (image bake + create-time key injection) forces this option.";
     };
 
@@ -124,18 +130,21 @@
     gateway = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "192.0.2.1";
       description = "Internal network gateway (typically a dedicated router host on the internal bridge; ADR-021 Phase 1.b). null ⇒ internal-bridge hosts get no default route (isolated lab fleets); set it for any fleet that expects egress.";
     };
 
     internal_cidr = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "192.0.2.0/24";
       description = "Internal service network CIDR (vmbr1 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
     };
 
     lan_gateway = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "198.51.100.1";
       description = ''
         LAN gateway (UDM router). Used by single-NIC hosts on vmbr0
         (network_mode = "single-external", e.g. landing-page) and by
@@ -148,12 +157,14 @@
     lan_cidr = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "198.51.100.0/24";
       description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
     };
 
     ntp_server = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "192.0.2.101";
       description = ''
         null ⇒ no fleet NTP: non-container hosts keep chrony disabled
         and rely on their own time sources.

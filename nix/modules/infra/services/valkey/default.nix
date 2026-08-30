@@ -45,6 +45,7 @@ in
     bindAddress = mkOption {
       type = types.str;
       default = "127.0.0.1";
+      example = "192.0.2.16";
       description = ''
         Address valkey binds to. Default is loopback (sidecar form).
         Set to the host's internal IP for a dedicated cache LXC reachable
@@ -55,6 +56,7 @@ in
     allowedSubnets = mkOption {
       type = types.listOf types.str;
       default = [];
+      example = [ "192.0.2.0/24" ];
       description = ''
         CIDRs allowed to reach the valkey port at the firewall level.
         Empty (default) keeps the port closed everywhere — appropriate

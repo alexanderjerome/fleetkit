@@ -277,6 +277,16 @@ in
     hosts = mkOption {
       type = types.listOf hostOpts;
       default = [];
+      example = lib.literalExpression ''
+        [{
+          hostname = "pve-alpha";
+          productType = "pve";
+          mac = "52:54:00:12:34:56";
+          ip = "198.51.100.30";
+          cidr = "198.51.100.30/24";
+          domain = "example.lan";
+        }]
+      '';
       description = ''
         List of PVE/PBS hosts the server has answers for. Each entry
         must have a matching SOPS entry at

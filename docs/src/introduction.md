@@ -16,5 +16,6 @@ $ nix flake init -t github:alexanderjerome/fleetkit
 $ fleet secrets init
 ```
 
-The [Options Reference](./options.md) is generated from the module
-declarations on every build — it cannot drift from the code.
+The [Fleet manifest](./fleet/index.md) and [Infra modules](./infra/index.md)
+references are generated from the module declarations on every build —
+they cannot drift from the code.

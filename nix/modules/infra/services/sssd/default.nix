@@ -40,6 +40,7 @@ in
     allowedGroups = mkOption {
       type = types.listOf types.str;
       default = [];
+      example = [ "developers" "platform-admins" ];
       description = ''
         Authentik group names allowed to SSH into this machine.
         Empty list allows any authenticated LDAP user.
@@ -50,6 +51,7 @@ in
     sudoGroups = mkOption {
       type = types.listOf types.str;
       default = [];
+      example = [ "developers" ];
       description = ''
         Authentik group names whose members get password-required sudo
         on this machine (rendered as security.sudo.extraRules matching
@@ -63,12 +65,16 @@ in
     ldapUri = mkOption {
       type = types.nullOr types.str;
       default = fleetConfig.ldap.uri;
+      defaultText = lib.literalExpression "config.fleet.network.ldap.uri";
+      example = "ldap://auth.example.internal:389";
       description = "URI of the Authentik LDAP outpost. Must be non-null when infra.sssd is enabled (asserted).";
     };
 
     baseDn = mkOption {
       type = types.nullOr types.str;
       default = fleetConfig.ldap.base_dn;
+      defaultText = lib.literalExpression "config.fleet.network.ldap.base_dn";
+      example = "dc=ldap,dc=example,dc=com";
       description = "LDAP base DN for user/group searches. Must be non-null when infra.sssd is enabled (asserted).";
     };
   };

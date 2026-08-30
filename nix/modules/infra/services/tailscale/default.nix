@@ -71,12 +71,14 @@ in
     authKeyFile = mkOption {
       type = types.nullOr types.path;
       default = null;
+      example = lib.literalExpression ''config.sops.secrets."services/tailscale/preauth_key".path'';
       description = "Path to file containing Tailscale/Headscale preauth key.";
     };
 
     tailnetName = mkOption {
       type = types.nullOr types.str;
       default = null;
+      example = "fleet-bot";
       description = "Tailnet or Headscale namespace name.";
     };
 
@@ -89,6 +91,7 @@ in
     advertiseRoutes = mkOption {
       type = types.listOf types.str;
       default = [];
+      example = [ "192.0.2.0/24" ];
       description = "CIDR routes this node should advertise.";
     };
 
@@ -154,6 +157,7 @@ in
     extraUpFlags = mkOption {
       type = types.listOf types.str;
       default = [];
+      example = [ "--login-server=https://vpn.example.dev" "--accept-dns=false" ];
       description = "Extra flags appended to tailscale up.";
     };
 
@@ -221,6 +225,7 @@ in
         };
       });
       default = {};
+      example = lib.literalExpression ''{ caddy = { servePort = 443; backendPort = 443; }; }'';
       description = ''
         Declarative Tailscale Serve raw-TCP forwarders — tailnet-only, never
         funnelled to the public internet. Each entry exposes

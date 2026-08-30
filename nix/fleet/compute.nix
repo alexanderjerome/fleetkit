@@ -101,6 +101,9 @@ let
       users = lib.mkOption {
         type = lib.types.listOf cloudInitUserOpts;
         default = [];
+        example = lib.literalExpression ''
+          [ { ref = "alice"; extra_groups = [ "docker" ]; } ]
+        '';
         description = "Local users created by cloud-init's `users:` directive.";
       };
       write_files = lib.mkOption {
@@ -171,10 +174,11 @@ let
 
   computeResourceType = lib.types.submodule ({ name, ... }: {
     options = {
-      env = lib.mkOption { type = lib.types.str; description = "Logical env (infra / platform / dev / prod / ...)."; };
-      stack = lib.mkOption { type = lib.types.str; description = "Dot-path stack label within env."; };
+      env = lib.mkOption { type = lib.types.str; example = "platform"; description = "Logical env (infra / platform / dev / prod / ...)."; };
+      stack = lib.mkOption { type = lib.types.str; example = "bitcoin.mainnet"; description = "Dot-path stack label within env."; };
       provider_instance = lib.mkOption {
         type = lib.types.strMatching "^[a-z-]+\\.[a-z][a-z0-9-]*$";
+        example = "proxmox.dev";
         description = ''Pointer to fleet.providers: "<provider>.<instance>" (e.g. "proxmox.dev").'';
       };
       kind = lib.mkOption {
@@ -208,16 +212,19 @@ let
       tags = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
+        example = [ "postgres" "monitoring" ];
         description = "Free-form tags (shown in the PVE UI, usable as Colmena deploy targets). Tags listed in fleet.STATEFUL_TAGS additionally force destruction protection (validator-enforced).";
       };
       ip = lib.mkOption {
         type = lib.types.str;
         default = "";
+        example = "198.51.100.20";
         description = "External/LAN IPv4 address (bare, no prefix — the emitter appends the prefix length). Used by the external leg of the dual / single-external / custom network modes. Empty when the host has no external interface.";
       };
       internal_ip = lib.mkOption {
         type = lib.types.str;
         default = "";
+        example = "192.0.2.104";
         description = "Internal fleet-LAN IPv4 address (bare, no prefix). Statically configured into the guest at create time and used as the host's inventory/SSH address (hosts.json, DNS A records). Empty for hosts without an internal interface (e.g. DHCP'd XCP-ng VMs).";
       };
 
@@ -332,6 +339,9 @@ let
       mount_points = lib.mkOption {
         type = lib.types.listOf mountPointOpts;
         default = [];
+        example = lib.literalExpression ''
+          [ { datastore = "local-storage"; path = "/data"; size = "64G"; } ]
+        '';
         description = "Extra PVE mount-point volumes ({ datastore, path, size, backup }) attached to the container (LXC only).";
       };
       features = lib.mkOption {
@@ -409,6 +419,9 @@ let
       data_disks = lib.mkOption {
         type = lib.types.listOf dataDiskOpts;
         default = [];
+        example = lib.literalExpression ''
+          [ { size_gb = 100; mount_path = "/data"; } ]
+        '';
         description = "Additional virtio data disks. Emitted as virtio1, virtio2, ... and formatted/mounted by cloud-init.";
       };
 
@@ -514,6 +527,25 @@ in {
   options.fleet.compute = lib.mkOption {
     type = lib.types.attrsOf computeResourceType;
     default = {};
+    example = lib.literalExpression ''
+      {
+        app-db = {
+          env = "platform";
+          stack = "core";
+          provider_instance = "proxmox.dev";
+          kind = "container";
+          vm_id = 204;
+          internal_ip = "192.0.2.104";
+          cpu_cores = 4;
+          memory_mb = 8192;
+          tags = [ "postgres" ];
+          protect = true;
+          mount_points = [
+            { datastore = "local-storage"; path = "/data"; size = "64G"; }
+          ];
+        };
+      }
+    '';
     description = "Every LXC/VM across all providers and envs. Entries live in nix/hosts/**/<name>.nix.";
   };
 }

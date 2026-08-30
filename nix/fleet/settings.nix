@@ -209,6 +209,7 @@
       certFile = lib.mkOption {
         type = lib.types.nullOr lib.types.path;
         default = null;
+        example = lib.literalExpression "./certs/fleet-root-ca.crt";
         description = "Root certificate of the fleet-internal CA (step-ca). Trusted on every host and used as the Caddy ACME root when set.";
       };
       acmeDirectory = lib.mkOption {
@@ -229,6 +230,7 @@
       trustedPublicKeys = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
+        example = [ "cache.example.dev:MExampleExampleExampleExampleExampleExampleExa=" ];
         description = "Public keys matching `substituters`.";
       };
     };

@@ -38,6 +38,7 @@ in
     internalIp = mkOption {
       type = types.str;
       default = "";
+      example = "192.0.2.104";
       description = ''
         Static IP for the internal service network (vmbr1). Set
         automatically from hosts.json by nix/lib/default.nix.
@@ -46,6 +47,7 @@ in
     internalGateway = mkOption {
       type = types.str;
       default = "";
+      example = "192.0.2.1";
       description = "Gateway for internal network. Only set on netgate.";
     };
     singleInterface = mkOption {
@@ -62,6 +64,7 @@ in
     externalIp = mkOption {
       type = types.str;
       default = "";
+      example = "198.51.100.20";
       description = ''
         LAN-side IPv4 address for vmbr0-only single-NIC hosts.
         Auto-wired from the fleet's `ip` field by nix/lib/default.nix

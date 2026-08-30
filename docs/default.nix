@@ -53,10 +53,11 @@ in pkgs.stdenv.mkDerivation {
   name = "fleetkit-docs";
   passthru.optionsJSON = optionsDoc.optionsJSON;
   src = ./.;
-  nativeBuildInputs = [ pkgs.mdbook ];
+  nativeBuildInputs = [ pkgs.mdbook pkgs.python3 ];
   buildPhase = ''
-    cp ${optionsDoc.optionsCommonMark} src/options.md
-    sed -i '1i # Options Reference\n' src/options.md
+    # Structured chapter tree from the options JSON (one page per
+    # option group + generated SUMMARY) — not the flat CommonMark dump.
+    python3 generate.py ${optionsDoc.optionsJSON}/share/doc/nixos/options.json src
     mdbook build
   '';
   installPhase = ''

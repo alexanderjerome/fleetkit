@@ -27,16 +27,19 @@ let
     options = {
       email = lib.mkOption {
         type = lib.types.str;
+        example = "alice@example.com";
         description = "Primary email address. Required by Authentik user.email.";
       };
       ssh_keys = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
+        example = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExa alice@laptop" ];
         description = "SSH public keys. Published as Authentik attributes.sshPublicKey for SSSD; injected into dev-VM cloud-init.";
       };
       groups = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
+        example = [ "platform-admins" ];
         description = "Authentik groups (LDAP-side membership). NOT the same as Linux groups on a VM — those are declared on cloud_init.users[*].extra_groups.";
       };
       type = lib.mkOption {
@@ -52,12 +55,27 @@ in
     apps = lib.mkOption {
       type = lib.types.attrsOf (lib.types.nullOr (lib.types.listOf lib.types.str));
       default = {};
+      example = lib.literalExpression ''
+        {
+          grafana = [ "platform-admins" ];
+          wiki = null;  # any authenticated user
+        }
+      '';
       description = "OIDC application slug → list of Authentik groups allowed to log in (null = any authenticated user).";
     };
 
     users = lib.mkOption {
       type = lib.types.attrsOf userOpts;
       default = {};
+      example = lib.literalExpression ''
+        {
+          alice = {
+            email = "alice@example.com";
+            groups = [ "platform-admins" ];
+            ssh_keys = [ "ssh-ed25519 AAAA... alice@laptop" ];
+          };
+        }
+      '';
       description = "Fleet identity registry. Keyed by Authentik username.";
     };
   };

@@ -68,7 +68,7 @@ in
     apiAddress = mkOption {
       type = types.str;
       default = config.infra.networking.internalIp or "127.0.0.1";
-      defaultText = "config.infra.networking.internalIp";
+      defaultText = lib.literalExpression "config.infra.networking.internalIp";
       description = "Bind IP for the registration/update HTTP API. Internal interface — reachable on the LAN/tailnet, never WAN.";
     };
 

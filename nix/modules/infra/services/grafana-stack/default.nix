@@ -217,6 +217,9 @@ in
     extraDatasources = mkOption {
       type = types.listOf types.attrs;
       default = [ ];
+      example = lib.literalExpression ''
+        [ { name = "app-db"; type = "postgres"; url = "192.0.2.104:5432"; jsonData.sslmode = "disable"; } ]
+      '';
       description = ''
         Extra Grafana datasources (verbatim provisioning attrsets) appended
         to the built-in Prometheus/Loki/Tempo ones — e.g. read-only

@@ -43,8 +43,9 @@ input and describe their fleet as data.
 
 ## Discovering the API
 
-- `nix build .#docs` → full options reference site (`result/options.html`),
-  generated from the module declarations — it cannot drift from the code.
+- `nix build .#docs` → options reference site (chapters per option group:
+  `fleet/*`, `infra/<module>`), generated from the module declarations —
+  it cannot drift from the code.
 - `nix build .#options-json` → the same option data as structured JSON
   (name, type, default, description, declaring file) — the preferred surface
   for programmatic/agent consumption.

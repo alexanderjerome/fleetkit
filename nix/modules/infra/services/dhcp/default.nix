@@ -77,6 +77,9 @@ in
         };
       });
       default = [];
+      example = lib.literalExpression ''
+        [ { hostname = "printer"; hw-address = "52:54:00:12:34:56"; ip-address = "192.0.2.240"; } ]
+      '';
       description = "Static DHCP reservations (MAC → IP).";
     };
   };

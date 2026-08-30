@@ -40,6 +40,7 @@ in
   options.fleet.serviceAliasMap = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = {};
+    example = lib.literalExpression ''{ grafana = "observe"; wiki = "docs-host"; }'';
     description = ''
       subdomain → fleet.compute key. Each alias resolves to that host's
       internal IP in both dnsRecords and publicDnsRecords. Single
@@ -52,6 +53,7 @@ in
   options.fleet.dnsStaticRecords = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = {};
+    example = lib.literalExpression ''{ ntp = "192.0.2.2"; ca = "192.0.2.2"; }'';
     description = ''
       name → literal IP, merged into dnsRecords last. For service
       aliases pinned to an address rather than a fleet host (edge
@@ -62,6 +64,7 @@ in
   options.fleet.dnsPublicOverrides = lib.mkOption {
     type = lib.types.attrsOf lib.types.str;
     default = {};
+    example = lib.literalExpression ''{ vpn = "192.0.2.2"; }'';
     description = ''
       name → literal IP, merged into publicDnsRecords last. Split-DNS
       overrides for names whose public zone answer (WAN IP) is not

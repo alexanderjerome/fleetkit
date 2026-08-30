@@ -50,6 +50,7 @@ in
     databases = mkOption {
       type = types.listOf types.str;
       default = [];
+      example = [ "appdb" "analytics" ];
       description = ''
         Database names to expose in pgweb. The core module exports
         attrNames of infra.postgresql.databases automatically; hosts

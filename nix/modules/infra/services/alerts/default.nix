@@ -29,6 +29,14 @@ in
     rules = mkOption {
       type = types.listOf types.attrs;
       default = [ ];
+      example = lib.literalExpression ''
+        [ (grafana.mkAlertRule {
+            uid = "svc-down";
+            title = "Service down";
+            expr = "up{job=\"myservice\"} == 0";
+            for = "5m";
+          }) ]
+      '';
       description = ''
         Grafana alert-rule attrsets (built via `grafana.mkAlertRule`) contributed
         by the modules enabled on this host. Mergeable — every module that wants

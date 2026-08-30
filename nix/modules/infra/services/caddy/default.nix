@@ -101,6 +101,8 @@ in
     acmeCA = mkOption {
       type = types.nullOr types.str;
       default = config.fleet.settings.internalCa.acmeDirectory;
+      defaultText = lib.literalExpression "config.fleet.settings.internalCa.acmeDirectory";
+      example = "https://ca.example.internal:9000/acme/acme/directory";
       description = "ACME CA directory URL (default: fleet.settings.internalCa.acmeDirectory). null ⇒ Let's Encrypt production.";
     };
 
@@ -108,6 +110,7 @@ in
       type = types.nullOr types.str;
       default = if config.fleet.settings.internalCa.certFile != null
                 then "${config.fleet.settings.internalCa.certFile}" else null;
+      defaultText = lib.literalMD "`config.fleet.settings.internalCa.certFile` (as a string) when set, else `null`";
       description = "Path to the ACME CA's root certificate (default: fleet.settings.internalCa.certFile). Required with an internal CA.";
     };
 
@@ -136,6 +139,9 @@ in
         };
       });
       default = {};
+      example = lib.literalExpression ''
+        { grafana = { name = "grafana"; port = 3000; }; }
+      '';
       description = "Services to reverse-proxy. Set automatically by infra modules.";
     };
 
@@ -150,6 +156,9 @@ in
         };
       });
       default = {};
+      example = lib.literalExpression ''
+        { "wiki.example.pve".extraConfig = "reverse_proxy http://127.0.0.1:8000"; }
+      '';
       description = "Additional manual virtual host definitions.";
     };
 
@@ -166,6 +175,9 @@ in
         };
       });
       default = {};
+      example = lib.literalExpression ''
+        { "app.example.dev".extraConfig = "reverse_proxy http://127.0.0.1:8080"; }
+      '';
       description = "Virtual hosts with Let's Encrypt certs via Cloudflare DNS-01.";
     };
 
@@ -243,6 +255,9 @@ in
         };
       });
       default = {};
+      example = lib.literalExpression ''
+        { "www.example.org".extraConfig = "reverse_proxy http://127.0.0.1:8080"; }
+      '';
       description = ''
         Public virtual hosts whose Let's Encrypt cert is obtained over
         HTTP-01 / TLS-ALPN-01 — no DNS provider, no Cloudflare token, no

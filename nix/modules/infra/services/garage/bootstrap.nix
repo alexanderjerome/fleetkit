@@ -34,6 +34,7 @@ in
 
     environmentFile = lib.mkOption {
       type = lib.types.path;
+      example = lib.literalExpression ''config.sops.templates."garage-env".path'';
       description = ''
         Path to the env file carrying GARAGE_RPC_SECRET. Almost always
         the same value the host module passes to

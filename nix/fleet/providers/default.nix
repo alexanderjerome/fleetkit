@@ -17,20 +17,24 @@ let
     options = {
       source = lib.mkOption {
         type = lib.types.str;
+        example = "bpg/proxmox";
         description = "Terraform provider source address (e.g. bpg/proxmox).";
       };
       version = lib.mkOption {
         type = lib.types.str;
+        example = "0.66.3";
         description = "Version constraint for required_providers.";
       };
       endpoint = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
+        example = "https://192.0.2.10:8006/";
         description = "API endpoint URL. Optional — provider may derive from secrets.";
       };
       secrets = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = {};
+        example = lib.literalExpression ''{ api_token = "integrations/proxmox/api_token"; }'';
         description = ''
           Map of provider-config-key → SOPS path. Emitter resolves each
           to `$${data.sops_file.secrets.data["<dotted-path>"]}` so secrets
@@ -45,6 +49,7 @@ let
       state = {
         prefix = lib.mkOption {
           type = lib.types.str;
+          example = "proxmox-dev";
           description = "S3 key prefix for this instance's tfstate(s). Full path: s3://<bucket>/<prefix>/<stack>/terraform.tfstate";
         };
       };
@@ -63,11 +68,13 @@ let
             nodes = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [];
+              example = [ "pve-alpha" "pve-beta" ];
               description = "Cluster member names. More than one entry makes the instance multi-node, which forces every compute entry on it to set `node` explicitly (validator-enforced).";
             };
             primary_node = lib.mkOption {
               type = lib.types.str;
               default = "";
+              example = "pve-alpha";
               description = "Fallback placement target: compute/resource entries that leave `node` empty are provisioned here.";
             };
             ha_manager = lib.mkOption {
@@ -97,16 +104,19 @@ let
     options = {
       source = lib.mkOption {
         type = lib.types.str;
+        example = "hashicorp/random";
         description = "Terraform provider source address (e.g. hashicorp/random).";
       };
       version = lib.mkOption {
         type = lib.types.str;
+        example = "3.6.2";
         description = "Version constraint for required_providers.";
       };
       endpoint = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Daemon/host URL — docker only (e.g. ssh://root@10.40.0.x or tcp://host:2376).";
+        example = "ssh://root@192.0.2.50";
+        description = "Daemon/host URL — docker only (e.g. ssh://root@192.0.2.50 or tcp://host:2376).";
       };
       secrets = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
@@ -120,6 +130,18 @@ in {
     proxmox = lib.mkOption {
       type = lib.types.attrsOf providerInstanceType;
       default = {};
+      example = lib.literalExpression ''
+        {
+          dev = {
+            source = "bpg/proxmox";
+            version = "0.66.3";
+            endpoint = "https://192.0.2.10:8006/";
+            secrets.api_token = "integrations/proxmox/api_token";
+            state.prefix = "proxmox-dev";
+            cluster.primary_node = "pve";
+          };
+        }
+      '';
       description = "Proxmox provider instances, keyed by name (e.g. prod, dev).";
     };
     xen-orchestra = lib.mkOption {

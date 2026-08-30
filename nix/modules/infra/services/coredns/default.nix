@@ -113,6 +113,7 @@ in
     records = mkOption {
       type = types.attrsOf types.str;
       default = {};
+      example = lib.literalExpression ''{ app-db = "192.0.2.104"; grafana = "192.0.2.4"; }'';
       description = "Hostname → IP mapping for A records in the internal zone.";
     };
 
@@ -126,6 +127,7 @@ in
     publicRecords = mkOption {
       type = types.attrsOf types.str;
       default = {};
+      example = lib.literalExpression ''{ vpn = "192.0.2.2"; }'';
       description = "Hostname → IP mapping for the public domain zone (internal resolution only).";
     };
 

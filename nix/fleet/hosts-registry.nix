@@ -20,6 +20,13 @@
   options.fleet.hostsRegistry = lib.mkOption {
     type = lib.types.attrsOf lib.types.unspecified;
     default = {};
+    example = lib.literalExpression ''
+      {
+        app-db = { config, pkgs, helpers, ... }: {
+          infra.postgresql.enable = true;
+        };
+      }
+    '';
     description = ''
       { hostName -> NixOS module function }. Consumed by
       nix/lib/default.nix mkHosts. Populated by each host file under

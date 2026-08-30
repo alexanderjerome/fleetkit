@@ -11,10 +11,12 @@ let
     options = {
       user = mkOption {
         type = types.str;
+        example = "appuser";
         description = "Role name (created with LOGIN and DB ownership).";
       };
       passwordSecret = mkOption {
         type = types.str;
+        example = "dbs/app/password";
         description = "Sops key path whose decrypted file contains the role password.";
       };
     };
@@ -46,7 +48,7 @@ in
     package = mkOption {
       type = types.package;
       default = pkgs.postgresql_16;
-      defaultText = "pkgs.postgresql_16";
+      defaultText = lib.literalExpression "pkgs.postgresql_16";
       description = "PostgreSQL package to use.";
     };
 
@@ -97,6 +99,7 @@ in
       default = lib.optional (config.fleet.settings.network.lanCidr != null)
         config.fleet.settings.network.lanCidr;
       defaultText = lib.literalExpression "[ config.fleet.settings.network.lanCidr ]";
+      example = [ "192.0.2.0/24" ];
       description = "Subnets allowed to connect via TCP. Defaults to the fleet LAN CIDR when fleet.settings.network.lanCidr is set, otherwise [] (local connections only).";
     };
 

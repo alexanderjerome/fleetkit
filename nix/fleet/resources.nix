@@ -20,14 +20,17 @@ let
     options = {
       env = lib.mkOption {
         type = lib.types.str;
+        example = "infra";
         description = "Logical env (infra / platform / dev / prod / ...). Together with `stack` forms the leaf stack id `<env>.<stack>`.";
       };
       stack = lib.mkOption {
         type = lib.types.str;
+        example = "core";
         description = "Dot-path stack label within env (e.g. \"core\", \"bitcoin.mainnet\"). Selects which `fleet tf` leaf stack emits this resource.";
       };
       provider_instance = lib.mkOption {
         type = lib.types.strMatching "^[a-z-]+\\.[a-z][a-z0-9-]*$";
+        example = "proxmox.dev";
         description = ''Pointer to fleet.providers: "<provider>.<instance>" (e.g. "proxmox.dev"). Routes the entry to the matching provider emitter.'';
       };
       kind = lib.mkOption {
@@ -72,6 +75,18 @@ in {
   options.fleet.resources = lib.mkOption {
     type = lib.types.attrsOf resourceType;
     default = {};
+    example = lib.literalExpression ''
+      {
+        pool-platform = {
+          env = "infra";
+          stack = "core";
+          provider_instance = "proxmox.dev";
+          kind = "pool";
+          pool_id = "platform";
+          comment = "Platform-tier containers";
+        };
+      }
+    '';
     description = "Non-OS resources across all providers. Entries live in nix/hosts/**/resources/ and nix/fleet/dns/inputs.nix.";
   };
 }

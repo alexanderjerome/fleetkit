@@ -149,6 +149,15 @@ in
       };
     }));
     default = {};
+    example = lib.literalExpression ''
+      {
+        myapp = {
+          port = 8080;
+          description = "Example web app";
+          category = "workload";
+        };
+      }
+    '';
     description = "Service registry. Infra modules register here; firewall, Caddy, and docs are derived automatically.";
   };
 
