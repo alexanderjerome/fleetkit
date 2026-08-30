@@ -27,10 +27,16 @@ let
 
   # Value may be a fleet.compute key (resolved to internal_ip) or a
   # literal IP string (used as-is, for WAN IPs not in fleet.compute).
+  # Anything else aborts the eval: the old silent fallthrough emitted
+  # retired fleet keys verbatim as A-record content, publishing broken
+  # records on apply (INFRA-110).
+  looksLikeIp = s: builtins.match "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+" s != null;
   resolveIp = value:
     if builtins.hasAttr value config.fleet.compute
     then config.fleet.compute.${value}.internal_ip
-    else value;
+    else if looksLikeIp value
+    then value
+    else throw "cloudflare.nix: DNS record value '${value}' is neither a fleet.compute key nor a literal IPv4 — fix the records map (INFRA-110)";
 
   mkZoneData = e: lib.nameValuePair (safeName e.zone_name) {
     name = e.zone_name;
