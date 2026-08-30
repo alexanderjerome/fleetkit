@@ -199,6 +199,30 @@ let
         }];
       };
     }
+    # single-internal plus a SECOND NIC on the same flat-L2 internal
+    # bridge, carrying a pinned MAC. The use case is an ingress identity
+    # a LAN-router port-forward targets by MAC: the host keeps its normal
+    # internal address on eth0 and answers a second, historically
+    # separate address on eth1. Declaring the NIC here is the point —
+    # a hand-added `pct set` NIC is not in the manifest, so the next
+    # apply reconciles it away and the ingress silently dies.
+    # In-guest addressing belongs in the host's systemd.network config;
+    # only the attachment + MAC are provider state. Requires
+    # meta.mac_address_eth1.
+    else if mode == "internal-plus-lan-mac" then {
+      network_interface = [
+        (nic { name = "eth0"; bridge = internalBridge; })
+        (nic { name = "eth1"; bridge = internalBridge;
+               mac_address = meta.mac_address_eth1; })
+      ];
+      initialization = {
+        hostname = meta._name;
+        dns = dnsConfig;
+        ip_config = [{
+          ipv4 = { address = "${meta.internal_ip}/24"; } // optGw net.gateway;
+        }];
+      };
+    }
     # ADR-021: dual-NIC LXC that IS a LAN gateway. eth0/vmbr0 carries
     # the WAN-side address + default route (fleet.network.lan_gateway);
     # eth1/vmbr1 carries the LAN-side address with no gateway (this host
