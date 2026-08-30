@@ -1,0 +1,10 @@
+[book]
+title = "fleetkit"
+description = "Parameterized NixOS fleet framework — options reference"
+src = "src"
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/alexanderjerome/fleetkit"
+default-theme = "ayu"
+preferred-dark-theme = "ayu"

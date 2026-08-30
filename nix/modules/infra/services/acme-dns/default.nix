@@ -29,31 +29,34 @@ in
     enable = mkEnableOption "acme-dns DNS-01 delegation server (ADR-026)";
 
     domain = mkOption {
-      type = types.str;
-      default = "acme-dns.${config.fleet.settings.domain.base}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.base != null
+                then "acme-dns.${config.fleet.settings.domain.base}" else null;
       defaultText = lib.literalExpression ''"acme-dns.''${config.fleet.settings.domain.base}"'';
-      description = "Delegated subdomain acme-dns is authoritative for (NS-delegated from the parent zone in Cloudflare).";
+      description = "Delegated subdomain acme-dns is authoritative for (NS-delegated from the parent zone in Cloudflare). Must be non-null when enabled (asserted).";
     };
 
     nsname = mkOption {
-      type = types.str;
-      default = "ns.acme-dns.${config.fleet.settings.domain.base}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.base != null
+                then "ns.acme-dns.${config.fleet.settings.domain.base}" else null;
       defaultText = lib.literalExpression ''"ns.acme-dns.''${config.fleet.settings.domain.base}"'';
-      description = "Authoritative nameserver FQDN. Needs a public glue A record (emitted by the Cloudflare resource) pointing at publicIp.";
+      description = "Authoritative nameserver FQDN. Needs a public glue A record (emitted by the Cloudflare resource) pointing at publicIp. Must be non-null when enabled (asserted).";
     };
 
     nsadmin = mkOption {
-      type = types.str;
-      default = "admin.${config.fleet.settings.domain.base}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.base != null
+                then "admin.${config.fleet.settings.domain.base}" else null;
       defaultText = lib.literalExpression ''"admin.''${config.fleet.settings.domain.base}"'';
-      description = "SOA RNAME (admin contact; '@' written as '.').";
+      description = "SOA RNAME (admin contact; '@' written as '.'). Must be non-null when enabled (asserted).";
     };
 
     publicIp = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.network.wanIp;
       defaultText = lib.literalExpression "config.fleet.settings.network.wanIp";
-      description = "Public IP returned for the apex/NS A records and used as the glue target. For an edge host this is the fleet WAN IP.";
+      description = "Public IP returned for the apex/NS A records and used as the glue target. For an edge host this is the fleet WAN IP. Must be non-null when enabled (asserted).";
     };
 
     dnsListen = mkOption {
@@ -83,6 +86,17 @@ in
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.domain != null && cfg.nsname != null && cfg.nsadmin != null;
+        message = "infra.acme-dns.enable is set but domain/nsname/nsadmin are null — set fleet.settings.domain.base (or infra.acme-dns.{domain,nsname,nsadmin} explicitly).";
+      }
+      {
+        assertion = cfg.publicIp != null;
+        message = "infra.acme-dns.enable is set but infra.acme-dns.publicIp is null — set fleet.settings.network.wanIp (or infra.acme-dns.publicIp explicitly).";
+      }
+    ];
+
     services.acme-dns = {
       enable = true;
       settings = {

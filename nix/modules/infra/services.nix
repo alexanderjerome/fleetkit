@@ -138,12 +138,12 @@ in
           hostname = mkOption {
             type = types.nullOr types.str;
             default = name;
-            description = "FQDN prefix (<hostname>.${domain}). Defaults to attr name. Null = path-only under host FQDN.";
+            description = "FQDN prefix under the internal domain (<hostname>.<fleet.settings.domain.internal>). Defaults to attr name. Null = path-only under host FQDN.";
           };
           path = mkOption {
             type = types.str;
             default = "/";
-            description = "URL path. '/' = own vhost. '/foo' = path under hostname.${domain}.";
+            description = "URL path. '/' = own vhost. '/foo' = path under the service hostname on the internal domain.";
           };
         };
       };

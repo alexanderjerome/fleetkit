@@ -83,16 +83,17 @@ let
         '';
       };
       gateway = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
         default = config.fleet.network.gateway;
         defaultText = lib.literalExpression "config.fleet.network.gateway";
-        description = "Default gateway (the fleet's internal gateway by default).";
+        description = "Default gateway (the fleet's internal gateway by default). Must be non-null for every declared host (asserted).";
       };
       dns = mkOption {
-        type = types.str;
-        default = lib.head config.fleet.network.internal_resolvers;
+        type = types.nullOr types.str;
+        default = if config.fleet.network.internal_resolvers != [ ]
+                  then lib.head config.fleet.network.internal_resolvers else null;
         defaultText = lib.literalExpression "lib.head config.fleet.network.internal_resolvers";
-        description = "DNS server (the fleet's internal DNS by default).";
+        description = "DNS server (the fleet's internal DNS by default). Must be non-null for every declared host (asserted).";
       };
       rootSshKeys = mkOption {
         type = types.listOf types.str;
@@ -125,19 +126,24 @@ let
       keyboard = mkOption {
         type = types.str;
         default = "en-us";
+        description = "Keyboard layout code written to the answer file's `[global]` section (Proxmox installer layout id, e.g. \"en-us\", \"de\").";
       };
       country = mkOption {
         type = types.str;
         default = "us";
+        description = "Two-letter country code written to the answer file's `[global]` section; the installer derives mirror and locale defaults from it.";
       };
       timezone = mkOption {
         type = types.str;
         default = "UTC";
+        description = "Timezone written to the answer file's `[global]` section (IANA name, e.g. \"Europe/Madrid\").";
       };
       mailto = mkOption {
-        type = types.str;
-        default = "ops@${config.fleet.settings.domain.base}";
+        type = types.nullOr types.str;
+        default = if config.fleet.settings.domain.base != null
+                  then "ops@${config.fleet.settings.domain.base}" else null;
         defaultText = lib.literalExpression ''"ops@''${config.fleet.settings.domain.base}"'';
+        description = "Notification address baked into the answer file. Must be non-null for every declared host (asserted).";
       };
       firstBootScript = mkOption {
         type = types.str;
@@ -255,8 +261,9 @@ in
     };
 
     publicUrl = mkOption {
-      type = types.str;
-      default = "http://answers.${config.fleet.settings.domain.internal}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.internal != null
+                then "http://answers.${config.fleet.settings.domain.internal}" else null;
       defaultText = lib.literalExpression ''"http://answers.''${config.fleet.settings.domain.internal}"'';
       description = ''
         Base URL the PVE installer uses to reach this server. Embedded
@@ -280,6 +287,17 @@ in
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.publicUrl != null;
+        message = "infra.pve-installer-answers.enable is set but publicUrl is null — set fleet.settings.domain.internal (or infra.pve-installer-answers.publicUrl explicitly).";
+      }
+      {
+        assertion = builtins.all (h: h.gateway != null && h.dns != null && h.mailto != null) cfg.hosts;
+        message = "infra.pve-installer-answers: every declared host needs non-null gateway/dns/mailto — set fleet.network.gateway, fleet.network.internal_resolvers and fleet.settings.domain.base, or override them per host entry.";
+      }
+    ];
+
     # System user owns the rendered SOPS template + runs the service.
     # Replaces DynamicUser=true: sops-nix needs a stable owner to grant
     # read access to the template file at /run/secrets/rendered/...

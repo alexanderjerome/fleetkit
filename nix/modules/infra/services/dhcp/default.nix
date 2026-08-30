@@ -46,11 +46,11 @@ in
     };
 
     domain = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.network.dns_domain;
       defaultText = lib.literalExpression "config.fleet.network.dns_domain";
       example = "example.lan";
-      description = "Domain name advertised to clients.";
+      description = "Domain name advertised to clients. Must be non-null when infra.dhcp is enabled (asserted).";
     };
 
     validLifetime = mkOption {
@@ -62,9 +62,18 @@ in
     reservations = mkOption {
       type = types.listOf (types.submodule {
         options = {
-          hostname = mkOption { type = types.str; };
-          hw-address = mkOption { type = types.str; };
-          ip-address = mkOption { type = types.str; };
+          hostname = mkOption {
+            type = types.str;
+            description = "Hostname handed to the client in the lease (Kea `hostname` reservation field).";
+          };
+          hw-address = mkOption {
+            type = types.str;
+            description = "Client MAC address the reservation matches on (colon-separated hex, e.g. \"52:54:00:12:34:56\").";
+          };
+          ip-address = mkOption {
+            type = types.str;
+            description = "Fixed IPv4 address assigned to the matching client. Must lie inside the served subnet.";
+          };
         };
       });
       default = [];
@@ -73,6 +82,11 @@ in
   };
 
   config = mkIf cfg.enable {
+    assertions = [{
+      assertion = cfg.domain != null;
+      message = "infra.dhcp.enable is set but infra.dhcp.domain is null — set fleet.network.dns_domain (or infra.dhcp.domain explicitly).";
+    }];
+
     services.kea.dhcp4 = {
       enable = true;
       settings = {

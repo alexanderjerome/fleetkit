@@ -92,10 +92,10 @@ in
     };
 
     email = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.acmeEmail;
       defaultText = lib.literalExpression "config.fleet.settings.acmeEmail";
-      description = "Email for ACME account registration.";
+      description = "Email for ACME account registration. Must be non-null when infra.caddy is enabled (asserted).";
     };
 
     acmeCA = mkOption {
@@ -266,6 +266,23 @@ in
   # acquisition for hosts without proxied services is handled by the host-cert
   # module via security.acme — no reverse proxy required.
   config = lib.mkMerge [
+    {
+      assertions = [
+        {
+          assertion = !cfg.enable || domain != null;
+          message = "infra.caddy is enabled but fleet.settings.domain.internal is null — caddy names its internal vhosts <name>.<domain.internal>.";
+        }
+        {
+          assertion = !cfg.enable || cfg.email != null;
+          message = "infra.caddy is enabled but infra.caddy.email is null — set fleet.settings.acmeEmail (or infra.caddy.email) for ACME account registration.";
+        }
+        {
+          assertion = !(cfg.devDomain && cfg.services != {}) || devDomain != null;
+          message = "infra.caddy.devDomain is set with registered services but fleet.settings.domain.base is null — public base-domain vhosts need it (or set infra.caddy.devDomain = false).";
+        }
+      ];
+    }
+
     (mkIf (cfg.services != {} || cfg.virtualHosts != {} || cfg.publicVirtualHosts != {} || cfg.publicHttp01VirtualHosts != {}) {
       infra.caddy.enable = mkDefault true;
     })

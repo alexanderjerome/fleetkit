@@ -174,6 +174,29 @@ def _setup_env() -> None:
         root = find_project_root()
 
     _ensure_sops_age_key()
+
+    # ── fleetkit-managed runtime env ──────────────────────────────
+    # Paths the toolchain (tofu, its ansible provider, sops) needs.
+    # These are FRAMEWORK conventions, not user configuration: ansible
+    # tree layout is what the terranix emitters generate for, and the
+    # plugin cache is a plain performance win. Everything is setdefault
+    # so an operator export still overrides.
+    ansible_dir = root / "ansible"
+    if ansible_dir.is_dir():
+        os.environ.setdefault("ANSIBLE_CONFIG", str(ansible_dir / "ansible.cfg"))
+        os.environ.setdefault("ANSIBLE_ROLES_PATH", str(ansible_dir / "roles"))
+        os.environ.setdefault("ANSIBLE_INVENTORY", str(ansible_dir / "inventory/static.yml"))
+        os.environ.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
+    os.environ.setdefault(
+        "TF_PLUGIN_CACHE_DIR",
+        os.path.expanduser("~/.cache/opentofu/plugin-cache"))
+    try:
+        os.makedirs(os.environ["TF_PLUGIN_CACHE_DIR"], exist_ok=True)
+    except OSError:
+        # Read-only or sandboxed HOME (CI, nix build): tofu silently
+        # ignores a missing cache dir, so degrade the same way.
+        pass
+
     sops = _find_sops()
     if not sops:
         return

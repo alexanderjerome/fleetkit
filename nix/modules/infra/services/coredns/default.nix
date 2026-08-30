@@ -85,10 +85,10 @@ in
     enable = mkEnableOption "CoreDNS internal DNS server";
 
     domain = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.domain.internal;
       defaultText = lib.literalExpression "config.fleet.settings.domain.internal";
-      description = "DNS zone to serve.";
+      description = "DNS zone to serve. Must be non-null when infra.coredns is enabled (asserted).";
     };
 
     listenAddress = mkOption {
@@ -117,10 +117,10 @@ in
     };
 
     publicDomain = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.domain.base;
       defaultText = lib.literalExpression "config.fleet.settings.domain.base";
-      description = "Public DNS zone for internal (split-horizon) resolution of public names.";
+      description = "Public DNS zone for internal (split-horizon) resolution of public names. Only forced when publicRecords is non-empty (asserted non-null then).";
     };
 
     publicRecords = mkOption {
@@ -146,6 +146,17 @@ in
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.domain != null;
+        message = "infra.coredns.enable is set but infra.coredns.domain is null — set fleet.settings.domain.internal (or infra.coredns.domain explicitly).";
+      }
+      {
+        assertion = !hasPublicRecords || cfg.publicDomain != null;
+        message = "infra.coredns.publicRecords is non-empty but infra.coredns.publicDomain is null — set fleet.settings.domain.base (or infra.coredns.publicDomain explicitly).";
+      }
+    ];
+
     services.coredns = {
       enable = true;
       config = corefile;

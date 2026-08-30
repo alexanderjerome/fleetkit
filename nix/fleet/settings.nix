@@ -8,6 +8,15 @@
 # `fleet/settings.nix` next to its manifest); framework modules read
 # `config.fleet.settings.*` instead of literals.
 #
+# Requiredness policy: fleetkit users COMPOSE — some run only one
+# provider, no tailnet, no observability stack. Therefore no option
+# here is unconditionally required unless the always-on base layer
+# consumes it (currently only `adminSshKeys`). Everything else is
+# `nullOr` with `default = null` (or a generic default) and is
+# enforced by an assertion inside the consuming module, so a
+# minimum-viable fleet (one host, one provider, no optional services)
+# evaluates with only the settings that fleet actually exercises.
+#
 # Scope note: this is the NIX-side surface (modules, emitters,
 # images). The `fleet` CLI reads its operator-side settings from
 # `fleet.toml` at the consumer repo root — deliberately a separate,
@@ -18,38 +27,43 @@
   options.fleet.settings = {
     name = lib.mkOption {
       type = lib.types.str;
+      default = "fleet";
       example = "acme";
-      description = "Short fleet/org slug. Used for branding and resource-name prefixes.";
+      description = "Short fleet/org slug. Used for branding and resource-name prefixes (attic cache name, hydra project, step-ca CA name, pgweb bookmarks).";
     };
 
     domain = {
       base = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "example.dev";
-        description = "Public base domain (external DNS zone).";
+        description = "Public base domain (external DNS zone). null ⇒ no public-name features; required (asserted) by modules that mint public names: caddy devDomain vhosts, coredns split-horizon zone, acme-dns, hydra/grafana mail senders, pve-installer-answers.";
       };
       internal = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "example.pve";
-        description = "Internal search/zone domain served by fleet DNS.";
+        description = "Internal search/zone domain served by fleet DNS. null ⇒ no internal-FQDN features; required (asserted) by caddy, coredns, host-cert (internal CA), step-ca, hydra, rabbitmq management vhosts.";
       };
       tailnetSuffix = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "hs.example.dev";
-        description = "MagicDNS base domain of the fleet tailnet (headscale base_domain).";
+        description = "MagicDNS base domain of the fleet tailnet (headscale base_domain). null ⇒ no tailnet serveUI names; required (asserted) when infra.tailscale.serveUI entries exist.";
       };
     };
 
     acmeEmail = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.nullOr lib.types.str;
+      default = null;
       example = "admin@example.com";
-      description = "Email for ACME account registration (internal CA and public Let's Encrypt).";
+      description = "Email for ACME account registration (internal CA and public Let's Encrypt). null ⇒ no ACME issuance; required (asserted) by infra.caddy and by host-cert when an internal CA is configured.";
     };
 
     adminSshKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       example = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREPLACEMEexamplekeyexamplekeyexample operator@example.com" ];
-      description = "SSH public keys authorized for the built-in operator accounts (sysadmin / colmena / dev / root) on every fleet host.";
+      description = "SSH public keys authorized for the built-in operator accounts (sysadmin / colmena / dev / root) on every fleet host. REQUIRED BY THE BASE LAYER — every NixOS fleet host creates these accounts, so building any host toplevel forces this option.";
     };
 
     tailnet = {
@@ -84,19 +98,22 @@
 
     observability = {
       grafanaDomain = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "grafana.example.pve";
-        description = "Domain Grafana serves on (server.domain / root_url).";
+        description = "Domain Grafana serves on (server.domain / root_url). null ⇒ no observability stack; required (asserted) when infra.grafana-stack is enabled.";
       };
       prometheusRemoteWriteUrl = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "http://192.0.2.4:9090/api/v1/write";
-        description = "Prometheus remote-write endpoint every fleet host's Alloy agent ships metrics to (usually the grafana-stack host).";
+        description = "Prometheus remote-write endpoint every fleet host's Alloy agent ships metrics to (usually the grafana-stack host). null (together with lokiPushUrl = null) ⇒ Alloy stays disabled by default fleet-wide; required (asserted) when infra.alloy is enabled.";
       };
       lokiPushUrl = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "http://192.0.2.4:3100/loki/api/v1/push";
-        description = "Loki push endpoint every fleet host's Alloy agent ships logs to (usually the grafana-stack host).";
+        description = "Loki push endpoint every fleet host's Alloy agent ships logs to (usually the grafana-stack host). null (together with prometheusRemoteWriteUrl = null) ⇒ Alloy stays disabled by default fleet-wide; required (asserted) when infra.alloy is enabled.";
       };
       tempoUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -105,9 +122,10 @@
         description = "HTTP URL of the fleet's Tempo trace store. null ⇒ no Tempo datasource is provisioned in Grafana.";
       };
       lokiS3Endpoint = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "http://s3.example.lan:3900";
-        description = "S3-compatible endpoint (e.g. in-fleet Garage) Loki writes chunks and index to.";
+        description = "S3-compatible endpoint (e.g. in-fleet Garage) Loki writes chunks and index to. null ⇒ no Loki chunk store; required (asserted) when infra.grafana-stack is enabled.";
       };
       pveScrapeTargets = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
@@ -125,14 +143,16 @@
 
     network = {
       wanIp = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "203.0.113.10";
-        description = "Public WAN IP of the fleet edge (stable pointer for public DNS pins).";
+        description = "Public WAN IP of the fleet edge (stable pointer for public DNS pins). null ⇒ no public-edge features; required (asserted) by infra.acme-dns (glue/apex A records).";
       };
       lanCidr = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "192.0.2.0/24";
-        description = "Fleet LAN CIDR (mirrors fleet.network.internal_cidr for module convenience).";
+        description = "Fleet LAN CIDR (mirrors fleet.network.internal_cidr for module convenience). null ⇒ modules that default network ACLs from it (e.g. infra.postgresql.allowedSubnets) default to an empty list instead.";
       };
       mgmtCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;

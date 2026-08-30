@@ -1,4 +1,4 @@
-{ config, lib, pkgs, xo-grafana-exporter-pkg ? null, nodes ? { }, ... }:
+{ config, lib, pkgs, nodes ? { }, ... }:
 let
   inherit (lib) mkEnableOption mkOption mkIf types;
   cfg = config.infra.grafana-stack;
@@ -184,10 +184,10 @@ in
         description = "Grafana HTTP listen port.";
       };
       domain = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
         default = obs.grafanaDomain;
         defaultText = lib.literalExpression "config.fleet.settings.observability.grafanaDomain";
-        description = "Grafana server domain for URL generation.";
+        description = "Grafana server domain for URL generation. Must be non-null when infra.grafana-stack is enabled (asserted).";
       };
     };
 
@@ -277,10 +277,11 @@ in
     smtp = {
       enable = mkEnableOption "SMTP email via Resend for Grafana alert notifications";
       fromAddress = mkOption {
-        type = types.str;
-        default = "grafana@${config.fleet.settings.domain.base}";
+        type = types.nullOr types.str;
+        default = if config.fleet.settings.domain.base != null
+                  then "grafana@${config.fleet.settings.domain.base}" else null;
         defaultText = lib.literalExpression ''"grafana@''${config.fleet.settings.domain.base}"'';
-        description = "Sender email address for Grafana alerts.";
+        description = "Sender email address for Grafana alerts. Must be non-null when smtp.enable is set (asserted).";
       };
       fromName = mkOption {
         type = types.str;
@@ -601,7 +602,7 @@ in
       script = ''
         export XOA_URL="$(cat "$CREDENTIALS_DIRECTORY/url")"
         export XOA_TOKEN_FILE="$CREDENTIALS_DIRECTORY/token"
-        exec ${xo-grafana-exporter-pkg}/bin/xo-grafana-exporter
+        exec ${pkgs.callPackage ../../../../pkgs/xo-grafana-exporter { }}/bin/xo-grafana-exporter
       '';
       serviceConfig = {
         DynamicUser = true;
@@ -621,17 +622,24 @@ in
       restartUnits = [ "xo-grafana-exporter.service" ];
     };
 
-    assertions = [{
-      assertion = !cfg.oidc.enable || config.fleet.settings.auth.oidcBaseUrl != null;
-      message = "infra.grafana-stack.oidc.enable requires fleet.settings.auth.oidcBaseUrl to be set.";
-    } {
-      assertion = xo-grafana-exporter-pkg != null;
-      message = ''
-        infra.grafana-stack needs the `xo-grafana-exporter-pkg` module
-        argument. Wire it in flake.nix:
-            { _module.args.xo-grafana-exporter-pkg = self.packages.x86_64-linux.xo-grafana-exporter; }
-      '';
-    }];
+    assertions = [
+      {
+        assertion = !cfg.oidc.enable || config.fleet.settings.auth.oidcBaseUrl != null;
+        message = "infra.grafana-stack.oidc.enable requires fleet.settings.auth.oidcBaseUrl to be set.";
+      }
+      {
+        assertion = cfg.grafana.domain != null;
+        message = "infra.grafana-stack.enable is set but infra.grafana-stack.grafana.domain is null — set fleet.settings.observability.grafanaDomain (or infra.grafana-stack.grafana.domain).";
+      }
+      {
+        assertion = obs.lokiS3Endpoint != null;
+        message = "infra.grafana-stack.enable is set but fleet.settings.observability.lokiS3Endpoint is null — Loki needs an S3-compatible chunk store endpoint.";
+      }
+      {
+        assertion = !cfg.smtp.enable || cfg.smtp.fromAddress != null;
+        message = "infra.grafana-stack.smtp.enable is set but infra.grafana-stack.smtp.fromAddress is null — set fleet.settings.domain.base (or smtp.fromAddress explicitly).";
+      }
+    ];
 
     # Alloy scrape for PVE + XO metrics
     infra.alloy.extraConfig = lib.mkAfter ''

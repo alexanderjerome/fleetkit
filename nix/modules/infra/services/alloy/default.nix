@@ -248,17 +248,17 @@ in
     enable = mkEnableOption "Grafana Alloy telemetry agent";
 
     prometheusUrl = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.observability.prometheusRemoteWriteUrl;
       defaultText = lib.literalExpression "config.fleet.settings.observability.prometheusRemoteWriteUrl";
-      description = "Prometheus remote-write endpoint URL.";
+      description = "Prometheus remote-write endpoint URL. Must be non-null when infra.alloy is enabled (asserted).";
     };
 
     lokiUrl = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.observability.lokiPushUrl;
       defaultText = lib.literalExpression "config.fleet.settings.observability.lokiPushUrl";
-      description = "Loki push endpoint URL.";
+      description = "Loki push endpoint URL. Must be non-null when infra.alloy is enabled (asserted).";
     };
 
     extraConfig = mkOption {
@@ -295,6 +295,17 @@ in
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.prometheusUrl != null;
+        message = "infra.alloy.enable is set but infra.alloy.prometheusUrl is null — set fleet.settings.observability.prometheusRemoteWriteUrl (or infra.alloy.prometheusUrl) to the fleet's Prometheus remote-write endpoint.";
+      }
+      {
+        assertion = cfg.lokiUrl != null;
+        message = "infra.alloy.enable is set but infra.alloy.lokiUrl is null — set fleet.settings.observability.lokiPushUrl (or infra.alloy.lokiUrl) to the fleet's Loki push endpoint.";
+      }
+    ];
+
     # INFRA-200: textfile-collector drop dir — writable by root oneshots
     # (sssd-probe), readable by alloy's node exporter.
     systemd.tmpfiles.rules = [ "d /var/lib/alloy-textfile 0755 root root -" ];

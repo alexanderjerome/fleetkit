@@ -196,6 +196,92 @@ def secrets():
     """
 
 
+@secrets.command("init")
+@click.option("--age-key-file", default=None,
+              help="Age key location (default: fleet.toml sops.age_key_file, "
+                   "falling back to ~/.ssh/sops-age.key).")
+@click.option("--from-ssh-key", default=None, type=click.Path(exists=True),
+              help="Derive the age key from an existing ed25519 SSH private key "
+                   "(ssh-to-age) instead of generating a fresh one.")
+def secrets_init(age_key_file: str | None, from_ssh_key: str | None):
+    """Scaffold this fleet's SOPS store (idempotent).
+
+    Creates everything a fleet needs for secrets to Just Work:
+
+    \b
+      1. an age keypair (generated, or derived from an SSH key)
+      2. .sops.yaml at the repo root with the key as recipient
+      3. an encrypted nix/secrets/secrets.yaml stub
+
+    The store path is fleetkit convention (nix/secrets/secrets.yaml,
+    overridable via fleet.toml [sops].secrets_file). Pass the same path
+    to mkFleet's `secretsFile` argument so hosts decrypt it at
+    activation. Existing files are left untouched.
+    """
+    from .config import repo_root as _repo_root
+    from .config import age_key_file as _cfg_age_key
+
+    root = str(_repo_root())
+    key_path = os.path.expanduser(age_key_file or _cfg_age_key())
+    secrets_path = _find_secrets_file()
+
+    # 1. Age key.
+    if os.path.exists(key_path):
+        console.print(f"age key exists: {key_path}")
+    else:
+        os.makedirs(os.path.dirname(key_path), exist_ok=True)
+        if from_ssh_key:
+            out = subprocess.run(["ssh-to-age", "-private-key", "-i", from_ssh_key],
+                                 capture_output=True, text=True, check=True)
+            with open(key_path, "w") as f:
+                f.write(out.stdout)
+        else:
+            subprocess.run(["age-keygen", "-o", key_path], check=True)
+        os.chmod(key_path, 0o600)
+        console.print(f"[green]created[/green] age key: {key_path}")
+
+    pub = subprocess.run(["age-keygen", "-y", key_path],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    console.print(f"recipient: {pub}")
+
+    # 2. .sops.yaml recipient config.
+    sops_yaml = os.path.join(root, ".sops.yaml")
+    if os.path.exists(sops_yaml):
+        console.print(f".sops.yaml exists: {sops_yaml} — add the recipient yourself if it's new")
+    else:
+        rel = os.path.relpath(secrets_path, root)
+        with open(sops_yaml, "w") as f:
+            f.write("# sops recipient config — scaffolded by `fleet secrets init`.\n"
+                    "keys:\n"
+                    f"  - &fleet {pub}\n"
+                    "creation_rules:\n"
+                    f"  - path_regex: {os.path.dirname(rel)}/.*\\.yaml$\n"
+                    "    key_groups:\n"
+                    "      - age:\n"
+                    "          - *fleet\n")
+        console.print(f"[green]created[/green] {sops_yaml}")
+
+    # 3. Encrypted secrets stub.
+    if os.path.exists(secrets_path):
+        console.print(f"secrets store exists: {secrets_path}")
+    else:
+        os.makedirs(os.path.dirname(secrets_path), exist_ok=True)
+        stub = os.path.join(os.path.dirname(secrets_path), ".stub.yaml")
+        with open(stub, "w") as f:
+            f.write("# fleet secrets — edit with `fleet secrets edit`.\n"
+                    "integrations: {}\n"
+                    "services: {}\n")
+        env = dict(os.environ, SOPS_AGE_KEY_FILE=key_path)
+        with open(secrets_path, "w") as out_f:
+            subprocess.run(["sops", "--config", sops_yaml, "-e", stub],
+                           check=True, stdout=out_f, env=env, cwd=root)
+        os.unlink(stub)
+        console.print(f"[green]created[/green] {secrets_path} (encrypted)")
+
+    console.print("\nwire it into your flake:  mkFleet { …; secretsFile = ./"
+                  + os.path.relpath(secrets_path, root) + "; }", style="bold")
+
+
 @secrets.command("edit")
 @click.option("--file", "secrets_file", default=None,
               help="Override path to secrets.yaml.")

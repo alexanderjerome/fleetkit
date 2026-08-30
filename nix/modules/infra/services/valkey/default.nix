@@ -39,6 +39,7 @@ in
     port = mkOption {
       type = types.port;
       default = 6379;
+      description = "TCP port valkey listens on. Only opened in the firewall (scoped to `allowedSubnets`) in the dedicated-host form; the loopback sidecar form needs no firewall opening.";
     };
 
     bindAddress = mkOption {

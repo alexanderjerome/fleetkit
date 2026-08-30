@@ -95,7 +95,8 @@ in
         # gateway via the LAN router.
         matchConfig.Name = "eth0";
         addresses = [{ Address = "${netCfg.externalIp}/24"; }];
-        routes = [{ Gateway = config.fleet.network.lan_gateway; }];
+        routes = lib.optional (config.fleet.network.lan_gateway != null)
+          { Gateway = config.fleet.network.lan_gateway; };
         # Fleet-DNS-only (no public resolver on this link) — see INFRA-107.
         networkConfig.DNS = config.fleet.network.internal_resolvers;
         # Routing domains pinned to this link so systemd-resolved sends
@@ -113,7 +114,8 @@ in
         # a future move only requires editing the manifest.
         matchConfig.Name = "eth0";
         addresses = [{ Address = "${netCfg.internalIp}/24"; }];
-        routes = [{ Gateway = config.fleet.network.gateway; }];
+        routes = lib.optional (config.fleet.network.gateway != null)
+          { Gateway = config.fleet.network.gateway; };
         # Fleet-DNS-only (no public resolver on this link) — see INFRA-107.
         networkConfig.DNS = config.fleet.network.internal_resolvers;
         # Routing domains pinned to this link — same split-DNS rationale as
@@ -150,7 +152,8 @@ in
       addresses = [{ Address = "${netCfg.internalIp}/24"; }];
       # Fleet-DNS-only on the internal link (no public resolver) — INFRA-107.
       networkConfig.DNS = config.fleet.network.internal_resolvers;
-      networkConfig.Domains = [ config.fleet.network.dns_domain ];
+      networkConfig.Domains = lib.optional (config.fleet.network.dns_domain != null)
+        config.fleet.network.dns_domain;
     } // lib.optionalAttrs (netCfg.internalGateway != "") {
       routes = [{ Gateway = netCfg.internalGateway; }];
     });
@@ -202,7 +205,11 @@ in
       builtins.elem (lib.getName pkg) [ "consul" "timescaledb" "claude-code" ];
 
     # ── Telemetry agent ──────────────────────────────────────────
-    infra.alloy.enable = true;
+    # On by default only when the fleet actually declares telemetry
+    # sinks — a fleet without an observability stack keeps Alloy off.
+    infra.alloy.enable = lib.mkDefault
+      (config.fleet.settings.observability.prometheusRemoteWriteUrl != null
+       && config.fleet.settings.observability.lokiPushUrl != null);
 
     # ── NTP via fleet chrony server ──────────────────────────────
     # Every fleet host runs chrony as a CLIENT pointing at
@@ -226,8 +233,11 @@ in
     # comes from the PVE host, so the LXC doesn't need NTP itself —
     # leave services.chrony off and rely on the host's chrony.
     services.chrony = {
-      enable = lib.mkDefault (!config.boot.isContainer);
-      servers = lib.mkDefault [ config.fleet.network.ntp_server ];
+      enable = lib.mkDefault
+        (!config.boot.isContainer && config.fleet.network.ntp_server != null);
+      servers = lib.mkDefault
+        (lib.optional (config.fleet.network.ntp_server != null)
+          config.fleet.network.ntp_server);
     };
   };
 }

@@ -654,5 +654,91 @@ def tf_rekey(scope: str, old_name: str, new_name: str, dry_run: bool, yes: bool)
                   f"[bold]sk deploy tf apply {leaf} --target {new_addr_types[0]}[/bold] to land "
                   "the in-place hostname update.[/dim]")
 
+@tf_stacks.command("state-pull")
+@click.argument("scope")
+@click.argument("out", type=click.Path(dir_okay=False))
+def tf_state_pull(scope: str, out: str) -> None:
+    """tofu state pull for the single leaf SCOPE, written to OUT.
+
+    Dumps the remote state as JSON for offline inspection or surgical
+    edits (e.g. rewriting a stale node_name that blocks refresh). Pair
+    with `state-push` after editing; remember to increment the
+    top-level `serial` field or the push is rejected.
+    """
+    root = find_project_root()
+    leaves = _resolve_scope(root, scope)
+    if len(leaves) != 1:
+        console.print(f"[red]ERROR:[/red] state-pull requires exactly one leaf (got {len(leaves)}).")
+        sys.exit(1)
+    leaf = leaves[0]
+    console.print(f"── state-pull {leaf} → {out} ──", style="bold cyan")
+    wd = _stage_json(root, leaf)
+    _ensure_init(wd)
+    with open(out, "w") as f:
+        subprocess.run(["tofu", "state", "pull"], cwd=wd, check=True, stdout=f)
+
+
+@tf_stacks.command("state-push")
+@click.argument("scope")
+@click.argument("statefile", type=click.Path(exists=True, dir_okay=False))
+def tf_state_push(scope: str, statefile: str) -> None:
+    """tofu state push STATEFILE for the single leaf SCOPE.
+
+    Uploads a locally edited state. tofu refuses lineage mismatches and
+    stale serials by default (no -force here on purpose) — pull with
+    `state-pull`, edit, bump `serial`, then push. Back the original up
+    first; state surgery has no undo beyond your copy.
+    """
+    root = find_project_root()
+    leaves = _resolve_scope(root, scope)
+    if len(leaves) != 1:
+        console.print(f"[red]ERROR:[/red] state-push requires exactly one leaf (got {len(leaves)}).")
+        sys.exit(1)
+    leaf = leaves[0]
+    console.print(f"── state-push {leaf} ← {statefile} ──", style="bold cyan")
+    wd = _stage_json(root, leaf)
+    _ensure_init(wd)
+    subprocess.run(["tofu", "state", "push", statefile], cwd=wd, check=True)
+
+
+@tf_stacks.command("state-export")
+@click.argument("scope", default="")
+@click.option("--out-dir", default="state-export", show_default=True,
+              type=click.Path(file_okay=False),
+              help="Directory to write <leaf>.tfstate.json files into.")
+def tf_state_export(scope: str, out_dir: str) -> None:
+    """Export live tfstate JSON for SCOPE (or the whole fleet) to files.
+
+    SCOPE is a leaf id or prefix (empty = every leaf stack). One
+    <env>-<stack>.tfstate.json per leaf lands in --out-dir, plus a
+    manifest.json listing what was exported. Read-only: this is
+    `tofu state pull` per stack, nothing is modified.
+    """
+    import json as _json
+
+    root = find_project_root()
+    leaves = _resolve_scope(root, scope) if scope else _resolve_scope(root, "")
+    if not leaves:
+        console.print("[red]ERROR:[/red] no leaf stacks matched.")
+        sys.exit(1)
+    outp = Path(out_dir)
+    outp.mkdir(parents=True, exist_ok=True)
+    manifest = {}
+    for leaf in leaves:
+        slug = leaf.replace(".", "-")
+        dest = outp / f"{slug}.tfstate.json"
+        console.print(f"── state-export {leaf} → {dest} ──", style="bold cyan")
+        wd = _stage_json(root, leaf)
+        _ensure_init(wd)
+        with open(dest, "w") as f:
+            rc = subprocess.run(["tofu", "state", "pull"], cwd=wd, check=False, stdout=f)
+        ok = rc.returncode == 0 and dest.stat().st_size > 0
+        manifest[leaf] = {"file": dest.name, "ok": ok}
+        if not ok:
+            console.print(f"[yellow]WARN:[/yellow] export failed for {leaf}")
+    (outp / "manifest.json").write_text(_json.dumps(manifest, indent=2))
+    good = sum(1 for m in manifest.values() if m["ok"])
+    console.print(f"exported {good}/{len(manifest)} stacks → {outp}/", style="bold green")
+
 
 __all__ = ["tf_stacks"]

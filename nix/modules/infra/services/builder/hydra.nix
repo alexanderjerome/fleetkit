@@ -25,38 +25,57 @@ in
     port = mkOption {
       type = types.port;
       default = 3000;
+      description = "TCP port for the hydra-server web UI. Opened in the firewall, reverse-proxied by the `hydra.<domain.internal>` Caddy vhost, and scraped by Alloy for HTTP metrics.";
     };
 
     listenHost = mkOption {
       type = types.str;
       default = "0.0.0.0";
+      description = "Address hydra-server binds to. Default listens on all interfaces; set to 127.0.0.1 to serve only through the Caddy vhost.";
     };
 
     hydraUrl = mkOption {
-      type = types.str;
-      default = "https://hydra.${config.fleet.settings.domain.internal}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.internal != null
+                then "https://hydra.${config.fleet.settings.domain.internal}" else null;
       defaultText = lib.literalExpression ''"https://hydra.''${config.fleet.settings.domain.internal}"'';
+      description = "Canonical external URL Hydra advertises for itself (links in the UI and notification emails). Asserted non-null when the module is enabled — set it explicitly if fleet.settings.domain.internal is null.";
     };
 
     notificationSender = mkOption {
-      type = types.str;
-      default = "hydra@${config.fleet.settings.domain.base}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.base != null
+                then "hydra@${config.fleet.settings.domain.base}" else null;
       defaultText = lib.literalExpression ''"hydra@''${config.fleet.settings.domain.base}"'';
+      description = "From: address for Hydra build-notification emails (also used as the msmtp envelope sender when smtp.enable is set). Asserted non-null when the module is enabled.";
     };
 
     maxConcurrentEvals = mkOption {
       type = types.int;
       default = 2;
+      description = "Value for Hydra's `max_concurrent_evals` — how many jobset evaluations may run in parallel. Keep low on builder hosts that also run real builds; each eval can use gigabytes of memory.";
     };
 
     project = mkOption {
       type = types.str;
       default = config.fleet.settings.name;
       defaultText = lib.literalExpression "config.fleet.settings.name";
+      description = "Name of the Hydra project that holds the declaratively-managed jobsets (spec.json in the repo).";
     };
   };
 
   config = mkIf (builderCfg.enable && cfg.enable) {
+    assertions = [
+      {
+        assertion = cfg.hydraUrl != null && config.fleet.settings.domain.internal != null;
+        message = "infra.builder.hydra.enable is set but fleet.settings.domain.internal is null — the hydra.<domain.internal> vhost and infra.builder.hydra.hydraUrl need it (or set hydraUrl explicitly AND domain.internal for the vhost).";
+      }
+      {
+        assertion = cfg.notificationSender != null;
+        message = "infra.builder.hydra.enable is set but infra.builder.hydra.notificationSender is null — set fleet.settings.domain.base (or notificationSender explicitly).";
+      }
+    ];
+
     services.hydra = {
       enable = true;
       hydraURL = cfg.hydraUrl;

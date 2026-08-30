@@ -1,16 +1,22 @@
 # nix/shell.nix — fleetkit operator devshell.
 #
-# Generic toolchain + environment wiring only. Consumer repos that need
-# extra tools or env (app CLIs, DB DSNs, language runtimes) pass
-# `extraPackages` / `extraShellHook` from their own flake — nothing
-# environment-specific may live here.
+# TOOLS ONLY, by design. The shell provides the toolchain (tofu, colmena,
+# sops, ansible, the venv for the fleet CLI) and nothing else: every piece
+# of runtime environment — provider credentials, ansible paths, the tofu
+# plugin cache, the age key — is provisioned by the `fleet` CLI itself at
+# invocation time, from fleet.toml + the SOPS store. Nothing here should
+# require (or leak) knowledge of a specific fleet.
+#
+# Consumer repos that need extra tools or env (app CLIs, DB DSNs, language
+# runtimes) pass `extraPackages` / `extraShellHook` via fleetkit.lib.mkDevShell.
 { pkgs, mode ? "dev", extraPackages ? [], extraShellHook ? "", fleet ? null }:
 
 let
-  # Fleet eval for operator conveniences (remote-builder discovery,
-  # sysadmin key path). Consumers pass their mkFleet result as `fleet`
-  # (via fleetkit.lib.mkDevShell); standalone the framework fleet is
-  # empty and every use below must tolerate that.
+  # Fleet eval for the one operator convenience the shell itself provides:
+  # remote-builder discovery + loading the deploy key into ssh-agent
+  # (interactive niceties that must exist BEFORE the CLI runs). Consumers
+  # pass their mkFleet result as `fleet`; standalone the framework fleet
+  # is empty and every use below must tolerate that.
   fleetEval =
     if fleet != null then fleet.fleetEval
     else (pkgs.lib.evalModules {
@@ -50,7 +56,7 @@ let
     ansible
 
     # Proxmox VE remote CLI — read-only cluster exploration.
-    (pkgs.callPackage ./pkgs/cv4pve-cli { })
+    (pkgs.callPackage ./pkgs/pve-cli { })
 
     # Utilities
     just
@@ -75,13 +81,6 @@ let
     FLEET_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
     export UV_PROJECT_ENVIRONMENT="$FLEET_REPO_ROOT/.venv"
 
-    # Fallback: source .env if it exists
-    if [ -f .env ]; then
-      set -a
-      source .env
-      set +a
-    fi
-
     # Sync venv from pyproject.toml via uv (when the consumer repo has
     # one). Failures must say so, not vanish silently.
     if command -v uv >/dev/null 2>&1 && [ -f "$FLEET_REPO_ROOT/pyproject.toml" ]; then
@@ -94,57 +93,19 @@ let
       export PATH="$VIRTUAL_ENV/bin:$PATH"
     fi
 
-    # SSH agent — load the sysadmin key for Colmena/SSH access to fleet hosts.
+    # SSH agent + deploy key — interactive convenience so colmena/ssh
+    # don't prompt per-host. Key path comes from the fleet manifest
+    # (fleet.network.sysadmin_key_file), the one fleet-specific value the
+    # shell touches; everything else is the CLI's job.
     if [ -z "''${SSH_AUTH_SOCK:-}" ]; then
       eval $(ssh-agent -s) > /dev/null
       trap "ssh-agent -k > /dev/null 2>&1" EXIT
     fi
-    # Sysadmin private key — single source of truth: fleet.network.sysadmin_key_file.
     SYSADMIN_KEY="${fleetEval.network.sysadmin_key_file}"
     SYSADMIN_KEY="''${SYSADMIN_KEY/#\~/''${HOME}}"
-    export SK_SYSADMIN_KEY_FILE="$SYSADMIN_KEY"
     if [ -f "$SYSADMIN_KEY" ]; then
       ssh-add -l 2>/dev/null | grep -q "$(basename "$SYSADMIN_KEY")" || ssh-add "$SYSADMIN_KEY" 2>/dev/null
     fi
-
-    # SOPS age key — operator-local file; never a literal in this repo.
-    export SOPS_AGE_KEY_FILE="''${SOPS_AGE_KEY_FILE:-$HOME/.ssh/sops-age.key}"
-
-    # Ansible — root the config/roles/inventory at the consumer repo
-    # (only when it ships an ansible/ tree).
-    if [ -d "$FLEET_REPO_ROOT/ansible" ]; then
-      export ANSIBLE_CONFIG="$FLEET_REPO_ROOT/ansible/ansible.cfg"
-      export ANSIBLE_ROLES_PATH="$FLEET_REPO_ROOT/ansible/roles"
-      export ANSIBLE_INVENTORY="$FLEET_REPO_ROOT/ansible/inventory/static.yml"
-      export ANSIBLE_HOST_KEY_CHECKING=False
-    fi
-
-    # OpenTofu provider plugin cache — one global store every
-    # .tf/<slug>/ workdir hardlinks into. Must exist before tofu runs
-    # or the setting is silently ignored.
-    export TF_PLUGIN_CACHE_DIR="''${TF_PLUGIN_CACHE_DIR:-$HOME/.cache/opentofu/plugin-cache}"
-    mkdir -p "$TF_PLUGIN_CACHE_DIR"
-
-    # Provider/state credentials from the consumer SOPS store (layout
-    # convention: integrations/{aws,proxmox} in nix/secrets/secrets.yaml).
-    if [ -f "$FLEET_REPO_ROOT/nix/secrets/secrets.yaml" ]; then
-      _aws_secrets=$(sops -d --extract '["integrations"]["aws"]' "$FLEET_REPO_ROOT/nix/secrets/secrets.yaml" 2>/dev/null || true)
-      if [ -n "$_aws_secrets" ]; then
-        export AWS_ACCESS_KEY_ID="$(echo "$_aws_secrets" | ${pkgs.yq-go}/bin/yq '.access_key_id')"
-        export AWS_SECRET_ACCESS_KEY="$(echo "$_aws_secrets" | ${pkgs.yq-go}/bin/yq '.secret_access_key')"
-        export AWS_DEFAULT_REGION="$(echo "$_aws_secrets" | ${pkgs.yq-go}/bin/yq '.region')"
-      fi
-      unset _aws_secrets
-      _pve_json=$(${pkgs.sops}/bin/sops -d --output-type json "$FLEET_REPO_ROOT/nix/secrets/secrets.yaml" 2>/dev/null || true)
-      if [ -n "$_pve_json" ]; then
-        export PROXMOX_VE_ENDPOINT="$(echo "$_pve_json" | ${pkgs.jq}/bin/jq -r '.integrations.proxmox.endpoint // empty')"
-        export PROXMOX_VE_USERNAME="$(echo "$_pve_json" | ${pkgs.jq}/bin/jq -r '.integrations.proxmox.username // empty')"
-        export PROXMOX_VE_PASSWORD="$(echo "$_pve_json" | ${pkgs.jq}/bin/jq -r '.integrations.proxmox.password // empty')"
-        export PROXMOX_VE_INSECURE=true
-      fi
-      unset _pve_json
-    fi
-
   '' + (if builderIp != null then ''
     # Remote builder — offload Nix builds to the fleet builder host
     # (silent unless reachable).

@@ -41,17 +41,17 @@ let
   # ── Shared option types — one ComputeResource shape ─────────────
   mountPointOpts = lib.types.submodule {
     options = {
-      datastore = lib.mkOption { type = lib.types.str; };
-      path = lib.mkOption { type = lib.types.str; };
+      datastore = lib.mkOption { type = lib.types.str; description = "PVE storage the mount-point volume is allocated on (e.g. \"local-storage\")."; };
+      path = lib.mkOption { type = lib.types.str; description = "Mountpoint inside the container (e.g. \"/data\")."; };
       size = lib.mkOption { type = lib.types.str; description = ''Size like "256G". Stringly-typed to match bpg input.''; };
-      backup = lib.mkOption { type = lib.types.bool; default = true; };
+      backup = lib.mkOption { type = lib.types.bool; default = true; description = "Include this volume in vzdump backups."; };
     };
   };
   featuresOpts = lib.types.submodule {
     options = {
-      nesting = lib.mkOption { type = lib.types.bool; default = true; };
-      fuse = lib.mkOption { type = lib.types.bool; default = true; };
-      keyctl = lib.mkOption { type = lib.types.bool; default = true; };
+      nesting = lib.mkOption { type = lib.types.bool; default = true; description = "Allow nested containers/namespaces inside the LXC (PVE `nesting` feature; needed for systemd-nspawn, Docker, nix sandboxed builds)."; };
+      fuse = lib.mkOption { type = lib.types.bool; default = true; description = "Allow FUSE filesystem mounts inside the LXC (PVE `fuse` feature)."; };
+      keyctl = lib.mkOption { type = lib.types.bool; default = true; description = "Allow the keyctl() syscall inside the LXC (PVE `keyctl` feature; needed by systemd-based guests)."; };
     };
   };
   importOpts = lib.types.submodule {
@@ -90,10 +90,10 @@ let
   };
   cloudInitWriteFileOpts = lib.types.submodule {
     options = {
-      path = lib.mkOption { type = lib.types.str; };
-      permissions = lib.mkOption { type = lib.types.str; default = "0644"; };
-      owner = lib.mkOption { type = lib.types.str; default = "root:root"; };
-      content = lib.mkOption { type = lib.types.str; };
+      path = lib.mkOption { type = lib.types.str; description = "Absolute destination path of the file inside the guest."; };
+      permissions = lib.mkOption { type = lib.types.str; default = "0644"; description = "Octal file mode string passed to cloud-init write_files."; };
+      owner = lib.mkOption { type = lib.types.str; default = "root:root"; description = "\"user:group\" ownership passed to cloud-init write_files."; };
+      content = lib.mkOption { type = lib.types.str; description = "Literal file contents, embedded verbatim in the cloud-init user-data."; };
     };
   };
   cloudInitOpts = lib.types.submodule {
@@ -147,24 +147,24 @@ let
 
   linkOpts = lib.types.submodule {
     options = {
-      text = lib.mkOption { type = lib.types.str; };
-      url  = lib.mkOption { type = lib.types.str; };
+      text = lib.mkOption { type = lib.types.str; description = "Link label as rendered in the Notes markdown."; };
+      url  = lib.mkOption { type = lib.types.str; description = "Link target URL."; };
     };
   };
   serviceLineOpts = lib.types.submodule {
     options = {
-      name    = lib.mkOption { type = lib.types.str; };
-      address = lib.mkOption { type = lib.types.str; default = ""; };
-      port    = lib.mkOption { type = lib.types.nullOr lib.types.int; default = null; };
+      name    = lib.mkOption { type = lib.types.str; description = "Service name shown in the Notes services table."; };
+      address = lib.mkOption { type = lib.types.str; default = ""; description = "Address/URL the service is reachable at. Empty = omitted from the rendered line."; };
+      port    = lib.mkOption { type = lib.types.nullOr lib.types.int; default = null; description = "Service port. null = omitted from the rendered line."; };
     };
   };
   noteOpts = lib.types.submodule {
     options = {
-      title    = lib.mkOption { type = lib.types.str; default = ""; };
-      summary  = lib.mkOption { type = lib.types.str; default = ""; };
-      services = lib.mkOption { type = lib.types.listOf serviceLineOpts; default = []; };
-      links    = lib.mkOption { type = lib.types.listOf linkOpts; default = []; };
-      stateful = lib.mkOption { type = lib.types.bool; default = false; };
+      title    = lib.mkOption { type = lib.types.str; default = ""; description = "Heading of the rendered Notes markdown. Empty = falls back to the host name."; };
+      summary  = lib.mkOption { type = lib.types.str; default = ""; description = "One-paragraph description rendered under the title."; };
+      services = lib.mkOption { type = lib.types.listOf serviceLineOpts; default = []; description = "Services running on the host, rendered as a bullet list (name, address, port)."; };
+      links    = lib.mkOption { type = lib.types.listOf linkOpts; default = []; description = "Related links (dashboards, runbooks, tickets) rendered as a bullet list."; };
+      stateful = lib.mkOption { type = lib.types.bool; default = false; description = "Render the STATEFUL/protected warning banner in the Notes panel. Informational only — destruction protection itself comes from `protect` / STATEFUL_TAGS."; };
       extra    = lib.mkOption { type = lib.types.str; default = ""; description = "Free-form markdown appended last."; };
     };
   };
@@ -205,9 +205,21 @@ let
         description = "If non-null, clone from this source VMID at provision time.";
       };
 
-      tags = lib.mkOption { type = lib.types.listOf lib.types.str; default = []; };
-      ip = lib.mkOption { type = lib.types.str; default = ""; };
-      internal_ip = lib.mkOption { type = lib.types.str; default = ""; };
+      tags = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Free-form tags (shown in the PVE UI, usable as Colmena deploy targets). Tags listed in fleet.STATEFUL_TAGS additionally force destruction protection (validator-enforced).";
+      };
+      ip = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "External/LAN IPv4 address (bare, no prefix — the emitter appends the prefix length). Used by the external leg of the dual / single-external / custom network modes. Empty when the host has no external interface.";
+      };
+      internal_ip = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Internal fleet-LAN IPv4 address (bare, no prefix). Statically configured into the guest at create time and used as the host's inventory/SSH address (hosts.json, DNS A records). Empty for hosts without an internal interface (e.g. DHCP'd XCP-ng VMs).";
+      };
 
       pool = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -250,8 +262,16 @@ let
         '';
       };
 
-      protect = lib.mkOption { type = lib.types.bool; default = false; };
-      ignore_changes = lib.mkOption { type = lib.types.listOf lib.types.str; default = []; };
+      protect = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Emit `lifecycle.prevent_destroy = true` on the generated Terraform resource. Required (or a strict-destruction-policy provider) for entries carrying a fleet.STATEFUL_TAGS tag; `fleet tf destroy` refuses to target protected resources.";
+      };
+      ignore_changes = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Terraform attribute paths emitted into `lifecycle.ignore_changes` — drift on these attributes is ignored at plan time.";
+      };
 
       # Lifecycle gate. When false, the entry is filtered out before
       # the validator runs and before any emitter sees it — net effect
@@ -292,25 +312,38 @@ let
         description = "\"managed\" = terranix/tofu-provisioned by this repo; \"external\" = provisioned elsewhere, NixOS-managed only.";
       };
 
-      notes = lib.mkOption { type = lib.types.str; default = ""; };
+      notes = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Free-text audit note. Plain-string fallback rendered in the PVE Notes panel (Summary tab) when the structured `note` is null.";
+      };
       note = lib.mkOption {
         type = lib.types.nullOr noteOpts;
         default = null;
         description = "Structured PVE Notes content. Takes precedence over `notes` when set.";
       };
 
-      cpu_cores = lib.mkOption { type = lib.types.int; default = 2; };
-      memory_mb = lib.mkOption { type = lib.types.int; default = 2048; };
-      swap_mb = lib.mkOption { type = lib.types.int; default = 2048; };
-      root_disk_gb = lib.mkOption { type = lib.types.int; default = 16; };
-      root_disk_datastore = lib.mkOption { type = lib.types.str; default = "local-storage"; };
+      cpu_cores = lib.mkOption { type = lib.types.int; default = 2; description = "Number of CPU cores allocated to the guest."; };
+      memory_mb = lib.mkOption { type = lib.types.int; default = 2048; description = "RAM in MiB. LXC containers pick up changes without a restart; VMs need a reboot."; };
+      swap_mb = lib.mkOption { type = lib.types.int; default = 2048; description = "Swap in MiB (LXC only)."; };
+      root_disk_gb = lib.mkOption { type = lib.types.int; default = 16; description = "Root disk size in GiB."; };
+      root_disk_datastore = lib.mkOption { type = lib.types.str; default = "local-storage"; description = "PVE storage the root disk is allocated on."; };
 
-      mount_points = lib.mkOption { type = lib.types.listOf mountPointOpts; default = []; };
-      features = lib.mkOption { type = featuresOpts; default = {}; };
+      mount_points = lib.mkOption {
+        type = lib.types.listOf mountPointOpts;
+        default = [];
+        description = "Extra PVE mount-point volumes ({ datastore, path, size, backup }) attached to the container (LXC only).";
+      };
+      features = lib.mkOption {
+        type = featuresOpts;
+        default = {};
+        description = "PVE container feature flags ({ nesting, fuse, keyctl }, all default true; LXC only).";
+      };
 
       network_mode = lib.mkOption {
         type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" ];
         default = "single-internal";
+        description = "Which NIC/bridge layout the emitter generates: single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both), or one of the custom/special-case layouts.";
       };
 
       privileged = lib.mkOption {
@@ -331,8 +364,16 @@ let
         description = "Pin the eth0 MAC address (uppercase colon-separated, e.g. \"BC:24:11:5B:EA:26\"). null = bpg-provider auto-assigns. Currently honoured by `lxc-router` mode; extend the network-mode emitters as needed for other modes.";
       };
 
-      import = lib.mkOption { type = importOpts; default = {}; };
-      cloud_init = lib.mkOption { type = cloudInitOpts; default = {}; };
+      import = lib.mkOption {
+        type = importOpts;
+        default = {};
+        description = "Cross-provider import settings ({ from_uuid }). Set from_uuid to adopt an existing XO VM instead of creating a fresh one.";
+      };
+      cloud_init = lib.mkOption {
+        type = cloudInitOpts;
+        default = {};
+        description = "Cloud-init user-data for VM guests (users, write_files, runcmd, hostname, VyOS config commands). Ignored for entries that don't render cloud-init (e.g. LXC containers).";
+      };
 
       vm_template = lib.mkOption {
         type = lib.types.enum [ "nixos" "debian-13" ];
@@ -391,7 +432,7 @@ let
                     type = lib.types.str;
                     description = "Full fleet.resources key for the SR (e.g. \"xo-sr-main\").";
                   };
-                  name    = lib.mkOption { type = lib.types.str; };
+                  name    = lib.mkOption { type = lib.types.str; description = "VDI name label as shown in Xen Orchestra."; };
                   size_gb = lib.mkOption {
                     type = lib.types.int;
                     description = ''

@@ -53,6 +53,7 @@ in
     listenPort = mkOption {
       type = types.port;
       default = 8080;
+      description = "Local TCP port atticd listens on. Clients reach the cache via the Caddy vhost at `fqdn`, which reverse-proxies to this port on loopback.";
     };
 
     fqdn = mkOption {
@@ -77,6 +78,7 @@ in
     s3Bucket = mkOption {
       type = types.str;
       default = "nix-cache";
+      description = "Bucket in the S3 store (`s3Endpoint`) that holds the cache NARs. Must match the bucket the minted access key was granted on (bootstrap step 1).";
     };
 
     s3Endpoint = mkOption {

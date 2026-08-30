@@ -15,7 +15,8 @@ let
   entries = lib.concatLists (lib.mapAttrsToList (hostName: hostCfg:
     let
       ts       = hostCfg.config.infra.tailscale or {};
-      domain   = ts.serveUIDomain or (hostCfg.config.fleet.settings.domain.tailnetSuffix or "");
+      domain   = let d = ts.serveUIDomain or (hostCfg.config.fleet.settings.domain.tailnetSuffix or "");
+                 in if d == null then "" else d;
       fqdn     = "${hostName}.${domain}";
       enabled  = lib.filterAttrs (_: u: u.enable) (ts.serveUI or {});
       # serveUI.backendAddress is loopback (tailscale-serve proxies to a local

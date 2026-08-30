@@ -71,10 +71,11 @@ in
     };
 
     domain = mkOption {
-      type = types.str;
-      default = "ca.${config.fleet.settings.domain.internal}";
+      type = types.nullOr types.str;
+      default = if config.fleet.settings.domain.internal != null
+                then "ca.${config.fleet.settings.domain.internal}" else null;
       defaultText = lib.literalExpression ''"ca.''${config.fleet.settings.domain.internal}"'';
-      description = "FQDN for the CA server.";
+      description = "FQDN for the CA server. Must be non-null when infra.step-ca is enabled (asserted).";
     };
 
     caName = mkOption {
@@ -92,6 +93,11 @@ in
   };
 
   config = mkIf cfg.enable {
+    assertions = [{
+      assertion = cfg.domain != null;
+      message = "infra.step-ca.enable is set but infra.step-ca.domain is null — set fleet.settings.domain.internal (or infra.step-ca.domain explicitly).";
+    }];
+
     environment.systemPackages = [ pkgs.step-cli ];
 
     sops.secrets."services/step-ca/intermediate_password" = sopsLib.mkSecret {

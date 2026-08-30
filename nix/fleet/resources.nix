@@ -18,12 +18,20 @@ let
   resourceType = lib.types.submodule ({ name, ... }: {
     freeformType = lib.types.attrs;
     options = {
-      env = lib.mkOption { type = lib.types.str; };
-      stack = lib.mkOption { type = lib.types.str; };
+      env = lib.mkOption {
+        type = lib.types.str;
+        description = "Logical env (infra / platform / dev / prod / ...). Together with `stack` forms the leaf stack id `<env>.<stack>`.";
+      };
+      stack = lib.mkOption {
+        type = lib.types.str;
+        description = "Dot-path stack label within env (e.g. \"core\", \"bitcoin.mainnet\"). Selects which `fleet tf` leaf stack emits this resource.";
+      };
       provider_instance = lib.mkOption {
         type = lib.types.strMatching "^[a-z-]+\\.[a-z][a-z0-9-]*$";
+        description = ''Pointer to fleet.providers: "<provider>.<instance>" (e.g. "proxmox.dev"). Routes the entry to the matching provider emitter.'';
       };
       kind = lib.mkOption {
+        description = "What the resource is. Selects the emitter code path and the kind-specific freeform fields it expects (validated in the emitter, not here).";
         type = lib.types.enum [
           # Proxmox
           "bridge" "pool" "group" "acl" "realm" "dns" "download" "file" "cluster-options"
@@ -37,8 +45,16 @@ let
           "grafana-folder" "grafana-rule-group"
         ];
       };
-      protect = lib.mkOption { type = lib.types.bool; default = false; };
-      notes = lib.mkOption { type = lib.types.str; default = ""; };
+      protect = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Emit `lifecycle.prevent_destroy = true` on the generated Terraform resource. The `fleet tf destroy` preflight refuses to target protected resources.";
+      };
+      notes = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Free-text audit note (why the resource exists, tickets, caveats). Informational only — never affects the emitted Terraform.";
+      };
 
       # PVE cluster-member targeting for node-scoped kinds (bridge,
       # file, download, dns). Cluster-wide kinds (pool, acl, realm,

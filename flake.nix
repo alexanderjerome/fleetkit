@@ -54,7 +54,7 @@
     #   sopsAgeKeyCommand  = [ ... ];            # colmena sops key lookup
     # }
     # → { fleetEval, hosts, deployable, colmena, nixosConfigurations,
-    #     packages (hostsJson / tf-stack-ids / fleet-specs / tf-<slug>… / run utils),
+    #     packages (hostsJson / tf-stack-ids / tf-<slug>… / run utils),
     #     fleetManifest, fleetAccess }
     #
     # The consumer re-exports these as its own flake outputs, so
@@ -68,6 +68,12 @@
       colmenaOverlays ? [],
       system ? "x86_64-linux",
       sopsAgeKeyCommand ? [ "sh" "-c" "cat \"$HOME/.ssh/sops-age.key\"" ],
+      # Path to the consumer's SOPS store (scaffold it with `fleet
+      # secrets init`). Wired into sops.defaultSopsFile on every host so
+      # modules' sopsLib.mkSecret declarations resolve without any
+      # per-consumer sops plumbing. null = consumer wires sops itself
+      # (or runs a fleet with no secrets — most modules won't).
+      secretsFile ? null,
     }:
     let
       pkgs = import nixpkgs { inherit system; };
@@ -104,7 +110,9 @@
         disko.nixosModules.disko
         ./nix/modules
         ./nix/fleet
-      ] ++ modules ++ globalModules;
+      ] ++ nixpkgs.lib.optional (secretsFile != null)
+        { sops.defaultSopsFile = secretsFile; }
+      ++ modules ++ globalModules;
 
       # One terranixConfiguration per leaf stack (env.stack dot-path).
       # Each emits its own config.tf.json and owns its own state key.
@@ -152,27 +160,6 @@
           tf-stack-ids = pkgs.writeText "tf-stack-ids.json"
             (builtins.toJSON leafStackIds);
 
-          # Per-host static specs (cpu / memory / disks) from the manifest —
-          # read-only feed for dashboards; NOT in hostsJson.
-          fleet-specs = pkgs.writeText "fleet-specs.json" (builtins.toJSON (
-            let enabled = nixpkgs.lib.filterAttrs (_: e: e.enabled or true) fleetEval.compute;
-            in builtins.mapAttrs (_name: c: {
-              kind                = c.kind or null;
-              env                 = c.env or null;
-              stack               = c.stack or null;
-              provider_instance   = c.provider_instance or null;
-              cpu_cores           = c.cpu_cores or null;
-              memory_mb           = c.memory_mb or null;
-              swap_mb             = c.swap_mb or null;
-              root_disk_gb        = c.root_disk_gb or null;
-              root_disk_datastore = c.root_disk_datastore or null;
-              network_mode        = c.network_mode or null;
-              privileged          = c.privileged or null;
-              mount_points = map (m: { inherit (m) datastore path size; }) (c.mount_points or []);
-              data_disks   = map (d: { inherit (d) size_gb mount_path; }) (c.data_disks or []);
-              xoa_disks    = map (d: { inherit (d) name size_gb; }) ((c.xoa or {}).disks or []);
-            }) enabled
-          ));
         }
         # One `tf-<env>-<stack>` package per leaf stack:
         # `nix build .#tf-platform-core` → config.tf.json for tofu.
@@ -198,11 +185,14 @@
         fleet = pkgs.callPackage ./nix/pkgs/_launcher { };
         default = fleet;
 
-        # ccmux — AI coding agent session manager.
-        ccmux = pkgs.callPackage ./nix/pkgs/ccmux { };
+        # pve-cli (wraps Corsinvest cv4pve) — kubectl-style remote CLI for Proxmox VE.
+        pve-cli = pkgs.callPackage ./nix/pkgs/pve-cli { };
 
-        # cv4pve-cli (Corsinvest) — kubectl-style remote CLI for Proxmox VE.
-        cv4pve-cli = pkgs.callPackage ./nix/pkgs/cv4pve-cli { };
+        # Options documentation site (mdBook + nixosOptionsDoc, generated
+        # from the module declarations — cannot drift from the code).
+        docs = import ./docs {
+          inherit pkgs nixpkgs sops-nix disko;
+        };
 
         # xoa-cli — standalone Xen Orchestra operator CLI. Reads over XO
         # REST, mutations over the JSON-RPC websocket. Drives the
@@ -210,28 +200,15 @@
         xoa-cli = pkgs.callPackage ./nix/pkgs/xoa-cli { };
 
         # Prometheus exporter for XCP-ng tiers via the XO REST API (for
-        # editions without the OpenMetrics plugin / dom0 credentials).
-        xo-grafana-exporter = pkgs.callPackage ./nix/pkgs/xo-grafana-exporter { };
 
         # Prepared Debian cloud image: firstboot fixes + docker/
-        # qemu-guest-agent baked in (KVM + XCP-ng substrates).
-        debianCloudImage = pkgs.callPackage ./nix/images/debian-cloud { };
 
-        # NixOS bootstrap image + installer ISO for XCP-ng / XOA
-        # (disko-driven multi-disk root + /nix split).
-        nixos-xcpng-template = import ./nix/images/by-platform/xen-orchestra.nix {
-          inherit pkgs disko;
-          nixpkgsLib = nixpkgs.lib;
-        };
-        nixos-xcpng-installer-iso = import ./nix/images/by-platform/xen-orchestra-installer.nix {
-          inherit pkgs;
-          nixpkgsLib = nixpkgs.lib;
-        };
       };
 
+      # Two shells only (by design): `default` for local dev, `ci` for
+      # non-interactive pipelines. Consumers build their own via lib.mkDevShell.
       devShells = {
         default = import ./nix/shell.nix { inherit pkgs; mode = "dev"; };
-        prod    = import ./nix/shell.nix { inherit pkgs; mode = "prod"; };
         ci      = import ./nix/shell.nix { inherit pkgs; mode = "ci"; };
       };
     }
@@ -263,24 +240,8 @@
     # hostsJson → full NixOS module stack). `nix eval
     # .#checks.x86_64-linux.example-fleet.drvPath` forces it without
     # building; `nix flake check` builds it.
-    checks.x86_64-linux =
-      let
-        pkgs = import nixpkgs { system = "x86_64-linux"; };
-        example = mkFleet {
-          modules = [ ./templates/minimal/fleet ];
-          backend = { bucket = "example-tofu"; };
-        };
-      in {
-        example-fleet = pkgs.runCommand "fleetkit-example-check" {
-          hostsJson = example.packages.hostsJson;
-          exampleToplevelDrv = example.nixosConfigurations.example.config.system.build.toplevel.drvPath;
-          stackIds = example.packages.tf-stack-ids;
-        } ''
-          test -s "$hostsJson"
-          test -s "$stackIds"
-          echo "example toplevel: $exampleToplevelDrv"
-          touch $out
-        '';
-      };
+    checks.x86_64-linux = import ./nix/checks.nix {
+      inherit nixpkgs mkFleet sops-nix disko;
+    };
   };
 }

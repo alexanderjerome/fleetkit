@@ -10,26 +10,35 @@
   options.fleet.network = {
     ldap = {
       uri = lib.mkOption {
-        type = lib.types.str;
-        description = "Authentik LDAP outpost URI (used by sssd + Proxmox realm).";
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Authentik LDAP outpost URI (used by sssd + Proxmox realm). null ⇒ no LDAP directory; required (asserted) when infra.sssd is enabled.";
       };
       base_dn = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "LDAP base DN for user/group searches. null ⇒ no LDAP directory; required (asserted) when infra.sssd is enabled.";
       };
       user_ou = lib.mkOption {
         type = lib.types.str;
+        default = "ou=users";
+        description = "OU holding user entries, relative to base_dn.";
       };
       group_ou = lib.mkOption {
         type = lib.types.str;
+        default = "ou=groups";
+        description = "OU holding group entries, relative to base_dn.";
       };
       ssh_pubkey_attr = lib.mkOption {
         type = lib.types.str;
+        default = "sshPublicKey";
         description = "LDAP attribute sssd reads for SSH public keys.";
       };
     };
 
     dns_servers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
+      default = [ "1.1.1.1" "9.9.9.9" ];
       description = ''
         BOOTSTRAP/CREATE-TIME resolver list only: written into every VM's
         cloud-init network-config drive and the PVE container/VM dnsConfig
@@ -49,7 +58,12 @@
 
     internal_resolvers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
+      default = [ ];
       description = ''
+        [] (default) ⇒ no fleet DNS: fleet links carry no per-link DNS
+        and hosts fall back to systemd-resolved defaults. Set to your
+        CoreDNS host(s) once fleet DNS exists.
+
         Resolver(s) for the RUNNING systemd-networkd link config on fleet
         hosts (nix/modules/infra/base/fleet-member.nix). Must be fleet-DNS-only
         (CoreDNS) — never a public resolver. The `search_domains` zones are
@@ -65,8 +79,9 @@
     };
 
     dns_domain = lib.mkOption {
-      type = lib.types.str;
-      description = "Internal search domain.";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Internal search domain. null ⇒ no internal zone: fleet links pin no search domain, provisioned guests get no create-time DNS domain, and infra.dhcp (asserted) needs an explicit domain.";
     };
 
     search_domains = lib.mkOption {
@@ -85,7 +100,7 @@
 
     sysadmin_ssh_key = lib.mkOption {
       type = lib.types.str;
-      description = "sysadmin SSH public key — baked into every CT/VM by nix/images/bootstrap.nix and referenced by Colmena.";
+      description = "sysadmin SSH public key — baked into every CT/VM by nix/images/bootstrap.nix and referenced by Colmena. REQUIRED BY THE PROVISIONING LAYER — rendering any provider stack (image bake + create-time key injection) forces this option.";
     };
 
     sysadmin_key_file = lib.mkOption {
@@ -107,32 +122,42 @@
     # `cloud_init.users[*].ref` on each VM entry.
 
     gateway = lib.mkOption {
-      type = lib.types.str;
-      description = "Internal network gateway (typically a dedicated router host on the internal bridge; ADR-021 Phase 1.b).";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Internal network gateway (typically a dedicated router host on the internal bridge; ADR-021 Phase 1.b). null ⇒ internal-bridge hosts get no default route (isolated lab fleets); set it for any fleet that expects egress.";
     };
 
     internal_cidr = lib.mkOption {
-      type = lib.types.str;
-      description = "Internal service network CIDR (vmbr1 bridge).";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Internal service network CIDR (vmbr1 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
     };
 
     lan_gateway = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.nullOr lib.types.str;
+      default = null;
       description = ''
         LAN gateway (UDM router). Used by single-NIC hosts on vmbr0
         (network_mode = "single-external", e.g. landing-page) and by
         the dual-NIC + WAN-side branches of `router`/`netgate`.
+        null ⇒ those host shapes get no WAN-side default route; set it
+        before declaring any vmbr0-facing host.
       '';
     };
 
     lan_cidr = lib.mkOption {
-      type = lib.types.str;
-      description = "LAN CIDR (vmbr0 bridge).";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
     };
 
     ntp_server = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.nullOr lib.types.str;
+      default = null;
       description = ''
+        null ⇒ no fleet NTP: non-container hosts keep chrony disabled
+        and rely on their own time sources.
+
         Fleet NTP server IP. Every NixOS host's chrony client (wired
         in nix/modules/infra/base/core/default.nix) targets this address. The
         host running the chrony server overrides its own
@@ -141,8 +166,10 @@
     };
   };
 
-  # Generic default: pin only the internal search domain. Consumers with
-  # split-DNS public zones extend the list in their network.nix.
+  # Generic default: pin only the internal search domain (none when no
+  # internal zone is declared). Consumers with split-DNS public zones
+  # extend the list in their network.nix.
   config.fleet.network.search_domains =
-    lib.mkDefault [ config.fleet.network.dns_domain ];
+    lib.mkDefault (lib.optional (config.fleet.network.dns_domain != null)
+      config.fleet.network.dns_domain);
 }

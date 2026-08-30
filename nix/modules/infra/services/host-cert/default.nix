@@ -13,7 +13,24 @@ in
   #
   # Skipped on Caddy hosts: Caddy already binds port 80 for its own ACME
   # challenges and issues this cert as part of its declared vhost set.
-  config = lib.mkIf (!caddyOwns) {
+  #
+  # Also skipped entirely when the fleet declares no internal CA
+  # (fleet.settings.internalCa.acmeDirectory = null): a minimum-viable
+  # fleet without step-ca must not have every host chase Let's Encrypt
+  # for an internal-only name.
+  config = lib.mkIf
+    (!caddyOwns && config.fleet.settings.internalCa.acmeDirectory != null) {
+    assertions = [
+      {
+        assertion = config.fleet.settings.acmeEmail != null;
+        message = "host-cert: fleet.settings.internalCa.acmeDirectory is set but fleet.settings.acmeEmail is null — ACME registration against the internal CA needs an account email.";
+      }
+      {
+        assertion = internalDomain != null;
+        message = "host-cert: fleet.settings.internalCa.acmeDirectory is set but fleet.settings.domain.internal is null — per-host certs are issued for <hostname>.<domain.internal>.";
+      }
+    ];
+
     security.acme = {
       acceptTerms = true;
       defaults.email = config.fleet.settings.acmeEmail;

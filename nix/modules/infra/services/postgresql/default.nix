@@ -94,9 +94,10 @@ in
 
     allowedSubnets = mkOption {
       type = types.listOf types.str;
-      default = [ config.fleet.settings.network.lanCidr ];
+      default = lib.optional (config.fleet.settings.network.lanCidr != null)
+        config.fleet.settings.network.lanCidr;
       defaultText = lib.literalExpression "[ config.fleet.settings.network.lanCidr ]";
-      description = "Subnets allowed to connect via TCP.";
+      description = "Subnets allowed to connect via TCP. Defaults to the fleet LAN CIDR when fleet.settings.network.lanCidr is set, otherwise [] (local connections only).";
     };
 
     authMethod = mkOption {

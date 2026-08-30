@@ -60,9 +60,21 @@ let
       cluster = lib.mkOption {
         type = lib.types.submodule {
           options = {
-            nodes = lib.mkOption { type = lib.types.listOf lib.types.str; default = []; };
-            primary_node = lib.mkOption { type = lib.types.str; default = ""; };
-            ha_manager = lib.mkOption { type = lib.types.bool; default = false; };
+            nodes = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              description = "Cluster member names. More than one entry makes the instance multi-node, which forces every compute entry on it to set `node` explicitly (validator-enforced).";
+            };
+            primary_node = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "Fallback placement target: compute/resource entries that leave `node` empty are provisioned here.";
+            };
+            ha_manager = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Whether the cluster runs the PVE HA manager. Informational — not consumed by any emitter yet.";
+            };
           };
         };
         default = {};

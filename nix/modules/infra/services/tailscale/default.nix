@@ -148,6 +148,7 @@ in
         };
       });
       default = null;
+      description = "Fetch the tailnet preauth key over HTTPS at boot instead of carrying a SOPS copy on every host: a pre-autoconnect oneshot curls `url`, writes the body to `outputPath` (mode 0400), and `authKeyFile` defaults to that path. null disables fetching.";
     };
 
     extraUpFlags = mkOption {
@@ -174,6 +175,7 @@ in
             backendAddress = mkOption {
               type = types.str;
               default = "127.0.0.1";
+              description = "Address the route proxies to (combined with `backendPort`). Default targets loopback on this host.";
             };
           };
         });
@@ -304,10 +306,10 @@ in
     };
 
     serveUIDomain = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = config.fleet.settings.domain.tailnetSuffix;
       defaultText = lib.literalExpression "config.fleet.settings.domain.tailnetSuffix";
-      description = "MagicDNS base domain for serveUI hostnames (`<hostname>.<this>`).";
+      description = "MagicDNS base domain for serveUI hostnames (`<hostname>.<this>`). Must be non-null when serveUI entries exist (asserted).";
     };
   };
 
@@ -355,7 +357,10 @@ in
           }
         ) ports);
 
-        assertions = map (port: {
+        assertions = [{
+          assertion = cfg.serveUIDomain != null;
+          message = "infra.tailscale.serveUI entries exist on '${config.networking.hostName}' but infra.tailscale.serveUIDomain is null — set fleet.settings.domain.tailnetSuffix (or serveUIDomain explicitly).";
+        }] ++ map (port: {
           assertion = (builtins.length (builtins.attrNames
             (lib.filterAttrs (_: u: u.path == "/" || u.path == "") (groupOn port)))) <= 1;
           message = "infra.tailscale.serveUI on '${config.networking.hostName}': servePort ${toString port} has more than one entry at path \"/\" — give them distinct paths or ports.";

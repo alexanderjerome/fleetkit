@@ -61,19 +61,30 @@ in
     };
 
     ldapUri = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = fleetConfig.ldap.uri;
-      description = "URI of the Authentik LDAP outpost.";
+      description = "URI of the Authentik LDAP outpost. Must be non-null when infra.sssd is enabled (asserted).";
     };
 
     baseDn = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
       default = fleetConfig.ldap.base_dn;
-      description = "LDAP base DN for user/group searches.";
+      description = "LDAP base DN for user/group searches. Must be non-null when infra.sssd is enabled (asserted).";
     };
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.ldapUri != null;
+        message = "infra.sssd.enable is set but infra.sssd.ldapUri is null — set fleet.network.ldap.uri (or infra.sssd.ldapUri explicitly).";
+      }
+      {
+        assertion = cfg.baseDn != null;
+        message = "infra.sssd.enable is set but infra.sssd.baseDn is null — set fleet.network.ldap.base_dn (or infra.sssd.baseDn explicitly).";
+      }
+    ];
+
     # INFRA-190: bind credential for the ldap-bind service account. The env
     # file substitutes $SSSD_BIND_PASSWORD in sssd.conf at service start
     # (systemd.exec semantics), keeping the secret out of the nix store. The
