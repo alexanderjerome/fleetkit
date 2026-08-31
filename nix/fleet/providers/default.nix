@@ -1,6 +1,6 @@
 { lib, ... }:
 
-# Provider & instance registry (SKRYBITDEV-599 schema v2) — schema only.
+# Provider & instance registry (schema v2) — schema only.
 #
 # Each entry describes HOW to talk to one physical provider endpoint.
 # Resources in fleet.compute / fleet.resources reference these via

@@ -1,6 +1,6 @@
 { config, lib, ... }:
 
-# Unified Proxmox/XCP-ng fleet manifest — schema v2 (SKRYBITDEV-599).
+# Unified Proxmox/XCP-ng fleet manifest — schema v2.
 #
 # Single source of truth for:
 #   1. tf emitters in nix/tf/        (TF JSON per-leaf-stack)

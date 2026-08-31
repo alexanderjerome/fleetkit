@@ -1,7 +1,7 @@
 # nix/fleet
 
 The fleet manifest — single source of truth for every container, VM, and
-shared resource in the deployment (schema v2, SKRYBITDEV-599).
+shared resource in the deployment (schema v2).
 
 Both halves of the pipeline read from here:
 

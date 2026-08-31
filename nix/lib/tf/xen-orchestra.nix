@@ -4,7 +4,7 @@
 # historical naming) talks to the XOA control plane; identifiers here
 # stay `xenorchestra_*` to match the provider's resource types.
 #
-# Scope rule (SKRYBITDEV-618): the only resource.* blocks emitted are
+# Scope rule: the only resource.* blocks emitted are
 # xenorchestra_vm and xenorchestra_cloud_config. Pools, networks, SRs,
 # and templates are read-only via data.xenorchestra_*. They must
 # already exist on the XCP-ng host (use xo-cli list-objects to

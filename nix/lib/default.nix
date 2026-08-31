@@ -49,10 +49,9 @@ in
   # Merge host/cluster definitions with the fleet-runtime manifest.
   #
   # hosts:    { name -> config-attrset | module-function }  — from
-  #                                                            fleetEval.hostsRegistry
-  #                                                            (SKRYBITDEV-628). Functions
-  #                                                            accept (config, lib, pkgs,
-  #                                                            helpers, ...).
+  #                                                            fleetEval.hostsRegistry.
+  #                                                            Functions accept (config,
+  #                                                            lib, pkgs, helpers, ...).
   # clusters: { clusterName -> (h -> config-attrset) }      — optional; was nix/clusters.nix, removed when no clusters were active
   # runtime:  { name -> flat-or-rich-entry }                 — from
   #                                                            fleetEval.hostsJson
@@ -91,7 +90,7 @@ in
           }) ++ nixpkgs.lib.optional ((internalIp != "") != (ip != "")) ({ ... }: {
             # Single-NIC host (exactly one of ip/internal_ip set).
             # Covers both the internal-only common case and ip-only
-            # vmbr0-attached hosts (SKRYBITDEV-611).
+            # vmbr0-attached hosts.
             infra.networking.singleInterface = true;
           }) ++ nixpkgs.lib.optional (ip != "" && internalIp == "") ({ ... }: {
             # vmbr0-only single-NIC host: feed the LAN IP into core.nix
