@@ -126,7 +126,7 @@ def _write_errors_log(clean_log: Path) -> tuple[Path, bool] | None:
         return None
 
 
-def sk_executable() -> str:
+def fleet_executable() -> str:
     """Absolute path to the currently-running `fleet` entry point.
 
     Used when fleet needs to re-invoke itself (tmux sessions, `nix develop`
@@ -321,9 +321,9 @@ def run_shell(
             # silently turning failed deploys into successes. The sentinel is
             # authoritative when it disagrees with script's own exit status.
             inner = (
-                f"{quoted}; _sk_rc=$?; "
-                f"printf '%s' \"$_sk_rc\" > {shlex.quote(str(rc_file))}; "
-                f"exit $_sk_rc"
+                f"{quoted}; _fleet_rc=$?; "
+                f"printf '%s' \"$_fleet_rc\" > {shlex.quote(str(rc_file))}; "
+                f"exit $_fleet_rc"
             )
             wrapped = ["script", "-q", "-f", "-e", str(log_path), "-c", inner]
         else:
@@ -384,7 +384,7 @@ def run_shell(
             else:
                 if rc == 0 and sentinel_rc != 0:
                     sys.stderr.write(
-                        f"\n[sk] wrapped command exited {sentinel_rc} but "
+                        f"\n[fleet] wrapped command exited {sentinel_rc} but "
                         f"script(1) reported 0 — propagating {sentinel_rc}.\n")
                     rc = sentinel_rc
             try:

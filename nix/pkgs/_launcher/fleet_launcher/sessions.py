@@ -42,10 +42,25 @@ console = Console()
 # presses ENTER). For authoritative RUN/DONE-OK/DONE-FAIL post-teardown
 # we write a small sentinel file when the wrapped command exits.
 
-_STATE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "sk" / "sessions"
+# User-global (XDG), NOT the project-root `.cache/fleet` that
+# _util.fleet_cache_dir() manages — different scope, same rename.
+_CACHE_HOME = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+_STATE_DIR = _CACHE_HOME / "fleet" / "sessions"
+_LEGACY_STATE_DIR = _CACHE_HOME / "sk" / "sessions"
 
 
 def _ensure_state_dir() -> None:
+    # One-time silent migration of the pre-INFRA-218 location, mirroring
+    # _util.fleet_cache_dir(). Sentinels for sessions still running under a
+    # tmux command rendered by the old binary keep landing in the legacy
+    # dir; _read_state() simply misses those and reports RUN/UNKNOWN from
+    # liveness instead, which is the same degradation as a missing file.
+    if not _STATE_DIR.exists() and _LEGACY_STATE_DIR.is_dir():
+        try:
+            _STATE_DIR.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(_LEGACY_STATE_DIR, _STATE_DIR)
+        except OSError:
+            pass  # cross-device / permissions — fall through, start fresh
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -158,7 +173,7 @@ def dispatch_session(
     cmd_str = " ".join(shlex.quote(c) for c in cmd)
 
     sentinel_cmd = (
-        f"_sk_write_status() {{ "
+        f"_fleet_write_status() {{ "
         f"  mkdir -p {shlex.quote(str(_STATE_DIR))}; "
         f"  printf '%s\\n' \"{{\\\"status\\\":\\\"$1\\\",\\\"updated_at\\\":$(date +%s),\\\"exit_code\\\":$2}}\" "
         f"  > {shlex.quote(str(_state_file(session_name)))}; "
@@ -166,11 +181,11 @@ def dispatch_session(
     )
     wrapped = (
         f"{sentinel_cmd}; "
-        f"_sk_write_status RUN 0; "
+        f"_fleet_write_status RUN 0; "
         f"env {' '.join(env_parts)} {cmd_str}; "
         f"_rc=$?; "
-        f"if [ $_rc -eq 0 ]; then _sk_write_status DONE-OK $_rc; "
-        f"else _sk_write_status DONE-FAIL $_rc; fi; "
+        f"if [ $_rc -eq 0 ]; then _fleet_write_status DONE-OK $_rc; "
+        f"else _fleet_write_status DONE-FAIL $_rc; fi; "
         f"echo; echo '=== {session_name} exited (rc=' $_rc ') — press ENTER to close ==='; "
         f"read"
     )

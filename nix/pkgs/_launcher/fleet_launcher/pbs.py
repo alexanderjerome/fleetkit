@@ -20,7 +20,7 @@ import time
 import click
 from rich.console import Console
 
-from ._util import find_project_root, fleet_cache_dir, sk_executable
+from ._util import find_project_root, fleet_cache_dir, fleet_executable
 from .pve_api import get_host as get_pve_host
 
 console = Console()
@@ -197,13 +197,13 @@ proxmox-backup-manager user generate-token {username} {token_id}
 
     for path, value in [(f"{sops_prefix}/endpoint", endpoint),
                         (f"{sops_prefix}/api_token", api_token)]:
-        sk_res = subprocess.run(
-            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
+        save_res = subprocess.run(
+            [fleet_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
-        if sk_res.returncode != 0:
-            console.print(f"[red]Failed to save {path}[/]: {sk_res.stderr.strip()}")
-            sys.exit(sk_res.returncode)
+        if save_res.returncode != 0:
+            console.print(f"[red]Failed to save {path}[/]: {save_res.stderr.strip()}")
+            sys.exit(save_res.returncode)
         console.print(f"  ✓ wrote SOPS: [cyan]{path}[/]")
 
     console.print()

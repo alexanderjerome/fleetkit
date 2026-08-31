@@ -321,14 +321,14 @@ def _maybe_reexec_for_missing_tools() -> None:
             f"and `nix` unavailable to re-enter the devshell — this will fail.\n")
         return
 
-    from ._util import find_project_root, sk_executable
+    from ._util import find_project_root, fleet_executable
     root = find_project_root()
     sys.stderr.write(
         f"fleet: {', '.join(missing)} not on PATH — re-entering devshell "
         f"(nix develop {root})…\n")
     os.environ["FLEET_REEXECED"] = "1"
     os.execvp("nix", ["nix", "develop", str(root), "--command",
-                      sk_executable(), *argv])
+                      fleet_executable(), *argv])
 
 
 def main() -> None:

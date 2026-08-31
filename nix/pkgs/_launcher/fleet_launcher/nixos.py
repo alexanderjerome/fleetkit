@@ -202,7 +202,7 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
     # Auto-session dispatch: launch one tmux session per host, then
     # return. Each session re-enters this command with FLEET_SESSION_NAME
     # set so the inner copy runs inline.
-    from ._util import env_get, sk_executable
+    from ._util import env_get, fleet_executable
     from .sessions import dispatch_session, running_inside
     if not no_session and not env_get("FLEET_NO_SESSION"):
         dispatched_any = False
@@ -216,7 +216,7 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
             # devshell PATH don't reliably carry `fleet`. If colmena is
             # missing in the session env, the inner fleet re-execs via
             # `nix develop` itself (see main._maybe_reexec_for_missing_tools).
-            inner_cmd = [sk_executable(), "deploy", "nixos", "apply", "host",
+            inner_cmd = [fleet_executable(), "deploy", "nixos", "apply", "host",
                          name, "--no-session"]
             if ip:
                 inner_cmd += ["--ip", ip]

@@ -37,7 +37,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ._util import find_project_root, fleet_cache_dir, sk_executable
+from ._util import find_project_root, fleet_cache_dir, fleet_executable
 
 console = Console()
 
@@ -475,7 +475,7 @@ pveum user token add {username} {token_id} --privsep=0 --output-format json
     for path, value in [(f"{sops_prefix}/endpoint", endpoint),
                         (f"{sops_prefix}/api_token", api_token)]:
         sk_res = subprocess.run(
-            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
+            [fleet_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
         if sk_res.returncode != 0:
