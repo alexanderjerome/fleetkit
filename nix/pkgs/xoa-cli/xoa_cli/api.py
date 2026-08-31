@@ -3,7 +3,7 @@
 Two surfaces, on purpose:
 
 * **REST** (`/rest/v0/…`, token cookie) — all read paths. Same surface the
-  sk launcher's `xoa_api.py` and the xo-grafana-exporter use.
+  fleet launcher's `xoa_api.py` and the xo-grafana-exporter use.
 * **JSON-RPC over websocket** (`wss://…/api/`) — all mutations. The REST
   PATCH surface is unreliable for writes on our XOA edition (INFRA-147:
   `PATCH /vdis/<uuid> {"size": …}` is a silent no-op), while the JSON-RPC

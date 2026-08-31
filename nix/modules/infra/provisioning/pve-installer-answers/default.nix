@@ -17,7 +17,7 @@
 # `services/pve-installer-answers/passwords/<hostname>`. The module
 # auto-declares the sops.secrets and renders the answer-file config
 # via sops.templates — passwords never live in the Nix store.
-# Populate via: sk devtools secrets keys add <path> '<sha512-crypt-hash>'.
+# Populate via: fleet devtools secrets keys add <path> '<sha512-crypt-hash>'.
 # Until populated, sops-nix activation fails and the service won't
 # start (loud failure, not silent).
 #

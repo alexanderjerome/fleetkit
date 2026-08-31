@@ -14,7 +14,7 @@
     version = "~> 1.1";
   };
 
-  # Path is relative to the workdir at `tofu apply` time. The sk CLI
+  # Path is relative to the workdir at `tofu apply` time. The fleet CLI
   # copies config.tf.json into .tf/<stack-slug>/, so the relative path
   # from there back to the repo's SOPS file is two parents up.
   data.sops_file.secrets = {

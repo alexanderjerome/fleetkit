@@ -215,7 +215,7 @@ in {
       description = ''
         ansible/ansible — runs ansible-playbook from a terraform resource
         (ansible_playbook). Used to chain post-install Ansible against
-        compute resources tofu just created, so `sk deploy tf apply` does
+        compute resources tofu just created, so `fleet deploy tf apply` does
         the whole "create the host + converge its config" cycle in one
         shot. The provider runs `ansible-playbook` locally on whoever
         runs tofu, so SSH key + inventory must be reachable there.

@@ -416,7 +416,7 @@ let
         default = true;
         description = ''
           Toggle for build-on-demand entries. When false, the entry is
-          filtered out before validation + emission, so `sk deploy tf
+          filtered out before validation + emission, so `fleet deploy tf
           apply <stack>` neither provisions nor preserves it. Flip to
           true to materialise; flip back to false (and apply) to
           destroy. See nix/hosts/xoa/xo-installer-v10.nix for the
@@ -426,10 +426,10 @@ let
 
       # Who creates/destroys the machine. "managed" (default) = this
       # repo's terranix/tofu pipeline; the entry lands in a fleet.stack
-      # and is provisioned by `sk deploy tf apply`. "external" = the
+      # and is provisioned by `fleet deploy tf apply`. "external" = the
       # machine exists outside this repo's providers (e.g. the homelab
       # dev server, INFRA-170 / ADR-080): the entry still feeds
-      # hostsJson (Colmena target, `sk remote`, `sk inventory`) but is
+      # hostsJson (Colmena target, `fleet remote`, `fleet inventory`) but is
       # excluded from fleet.stacks (no Terraform emitted) and from the
       # provider-coupled validators. `provider_instance` remains
       # required as a descriptive label (e.g. "external.homelab") so

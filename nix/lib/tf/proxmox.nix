@@ -332,7 +332,7 @@ in rec {
       # NixOS LXC setup plugin (PVE::LXC::Setup::NixOS) whose setup_network
       # writes a static /etc/systemd/network/eth0.network from the net0
       # ip=/gw= at create time — so a fresh container comes up on its
-      # declared internal_ip with no `sk bootstraps container` step. (Was
+      # declared internal_ip with no separate bootstrap step at all. (Was
       # "unmanaged", under which PVE wrote no network config and the CT
       # fell back to DHCP.) Custom Debian/Ubuntu images keep their own
       # ostype; any other custom image stays "unmanaged".

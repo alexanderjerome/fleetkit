@@ -24,7 +24,7 @@ let
   # XCP-ng/XOA-specific: disk size changes on xenorchestra_vm are
   # ForceNew in the vatesfr/xenorchestra provider. To grow a disk
   # without TF destroying it (and the data on it), we ignore size
-  # drift. Growth is operator-driven via `sk xoa resize-disk` →
+  # drift. Growth is operator-driven via `fleet xoa resize-disk` →
   # `xo-cli vdi.set` + `resize2fs` inside the guest. The fleet
   # `size_gb` is the *intent at first apply*; live size is owned by
   # the operator afterwards.

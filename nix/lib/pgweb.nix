@@ -19,7 +19,7 @@ rec {
   # One password per PG instance (not one fleet-wide) so a leaked
   # credential is scoped to a single server. Key derived from the
   # hostname on both ends; add the value with:
-  #   sk devtools secrets keys add dbs/pgweb/instances/<host> <pw>
+  #   fleet devtools secrets keys add dbs/pgweb/instances/<host> <pw>
   instanceSecretKey = hostName: "dbs/pgweb/instances/${hostName}";
 
   # Bookmark display name == file stem shown in the pgweb UI.

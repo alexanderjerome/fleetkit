@@ -27,7 +27,7 @@ let
   enabledCompute = filterAttrs (_: e: e.enabled or true) cfg.compute;
 
   # `provisioning = "external"` entries (INFRA-170 / ADR-080) are
-  # NixOS-managed only: they stay in hostsJson (Colmena target, sk
+  # NixOS-managed only: they stay in hostsJson (Colmena target, fleet
   # remote/inventory) but never reach the Terraform emitters or the
   # provider-coupled validators — their machine lives outside this
   # repo's providers.
@@ -366,7 +366,7 @@ in {
       '';
     };
 
-    # Legacy hosts.json-shaped export — keeps mkHosts / sk launcher /
+    # Legacy hosts.json-shaped export — keeps mkHosts / fleet launcher /
     # grafana-stack / sssd working during the transition. Built from
     # fleet.compute so there's only one source of truth.
     hostsJson = lib.mkOption {
@@ -393,7 +393,7 @@ in {
 
   # hostsJson reflects only enabled entries — disabled installers
   # shouldn't pollute the inventory, get Colmena targets, or appear
-  # in `sk inventory`.
+  # in `fleet inventory`.
   config.fleet.hostsJson = mapAttrs (name: meta: {
     hostname = name;
     vmid = meta.vm_id;
@@ -415,7 +415,7 @@ in {
       if meta.kind == "container" then "pve.lxc"
       else if lib.hasPrefix "xen-orchestra." meta.provider_instance then "xcpng.vm"
       else "pve.qemu";
-    # Needed by `sk inventory generate` to know which entries should
+    # Needed by `fleet inventory generate` to know which entries should
     # be IP-discovered via XOA vs. PVE. The Proxmox path also benefits
     # from this for future multi-provider drift detection.
     provider_instance = meta.provider_instance;

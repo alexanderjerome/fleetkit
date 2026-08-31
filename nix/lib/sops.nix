@@ -49,7 +49,7 @@
   # nix/fleet/vaultwarden-publish.nix. Each entry maps a SOPS key (whose
   # decrypted VALUE becomes the login password) to a shared Vaultwarden org
   # login item. This is STRUCTURE ONLY (no decrypted values reach the nix
-  # store); `nix run .#vaultwarden-manifest` emits it and `sk vaultwarden sync`
+  # store); `nix run .#vaultwarden-manifest` emits it and `fleet vaultwarden sync`
   # reads secrets.yaml + the manifest to `bw`-upsert the item. Opt-in by
   # construction: only keys listed in the allowlist are ever published.
   #

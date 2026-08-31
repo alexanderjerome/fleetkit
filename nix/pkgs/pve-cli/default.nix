@@ -3,7 +3,7 @@
 # kubectl-style remote CLI for PVE: direct API access (`cv4pve-cli api get
 # /cluster/resources`), context switching between clusters (`config add/use`),
 # and ~300 aliases for common ops. Used here for read-only cluster inventory
-# exploration; mutations still go through terranix (`sk deploy tf`).
+# exploration; mutations still go through terranix (`fleet deploy tf`).
 #
 # Not in nixpkgs — upstream ships a self-contained .NET single-file binary
 # (apphost ELF with the managed bundle APPENDED to the file). That layout

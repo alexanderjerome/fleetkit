@@ -13,7 +13,7 @@
 #      password (path convention shared with the pgweb LXC via
 #      nix/lib/pgweb.nix). The key must exist in secrets.yaml or
 #      activation fails — add it when adding a new PG host:
-#        sk devtools secrets keys add dbs/pgweb/instances/<host> <pw>
+#        fleet devtools secrets keys add dbs/pgweb/instances/<host> <pw>
 #   2. Provisions the `pgweb` role: LOGIN + pg_read_all_data +
 #      default_transaction_read_only=on + small connection cap.
 #   3. pg_hba: `pgweb` may only connect from the pgweb LXC, rejected

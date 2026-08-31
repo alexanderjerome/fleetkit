@@ -10,7 +10,7 @@ let
   # Two auth shapes supported, decided by which keys the instance's
   # `secrets` map carries:
   #   * `api_token` (single string of form "<USER>@<REALM>!<TOKEN>=<UUID>")
-  #     — minted via `sk pve cluster issue-tf-token`. Preferred for new
+  #     — minted via `fleet pve cluster issue-tf-token`. Preferred for new
   #     instances (scoped + revocable in the PVE UI).
   #   * `username` + `password` — legacy pair, still used by the OLD
   #     proxmox.dev instance until it's retired.
