@@ -110,6 +110,13 @@
         disko.nixosModules.disko
         ./nix/modules
         ./nix/fleet
+        # fleetkit's public helper surface, so CONSUMER modules can reach the
+        # same builders framework modules use (sops secret declaration, grafana
+        # dashboards, PVE notes, …) without vendoring a copy or path-importing
+        # into this flake's store path. See nix/lib/module-args.nix.
+        ({ pkgs, lib, ... }: {
+          _module.args.fleetLib = import ./nix/lib/module-args.nix { inherit lib pkgs; };
+        })
       ] ++ nixpkgs.lib.optional (secretsFile != null)
         { sops.defaultSopsFile = secretsFile; }
       ++ modules ++ globalModules;
