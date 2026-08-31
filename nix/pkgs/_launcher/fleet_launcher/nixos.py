@@ -186,7 +186,12 @@ def apply_all(args: tuple[str, ...], no_refresh: bool):
               help="Stage as `boot` goal and reboot the target after activation. "
                    "Required when critical components change (dbus-implementation, "
                    "kernel, init system) — NixOS refuses to switch live then.")
-def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_session: bool, reboot: bool):
+@click.option("--dry-activate", "dry_activate", is_flag=True,
+              help="Build and copy the closure, then show what activation WOULD "
+                   "do (which units restart/reload) without switching. Read-only "
+                   "on the target's running system. Mutually exclusive with --reboot.")
+def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_session: bool,
+               reboot: bool, dry_activate: bool):
     """Deploy NixOS config to one or more hosts.
 
     NAMES are Colmena node names (e.g. ``netgate build auth``).
@@ -224,6 +229,8 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
                 inner_cmd.append("--no-refresh")
             if reboot:
                 inner_cmd.append("--reboot")
+            if dry_activate:
+                inner_cmd.append("--dry-activate")
             result = dispatch_session(
                 session_name,
                 inner_cmd,
@@ -265,7 +272,17 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
                 f.write("\n")
             console.print(f"[yellow]IP override:[/yellow] {name} → {ip} (was {original_ip})")
     selector = ",".join(names)
-    cmd = ["colmena", "apply", "--impure", "--on", selector]
+    # `dry-activate` is a colmena GOAL, not a flag: it builds and copies the
+    # closure, then runs the activation script in dry mode so the target
+    # reports which units would restart — without switching. The running
+    # system is untouched, which makes it the right last check before a real
+    # apply, and the reason a deploy CLI should expose it rather than making
+    # operators reach for raw colmena.
+    if dry_activate and reboot:
+        raise click.UsageError("--dry-activate and --reboot are mutually exclusive: "
+                               "a dry run does not activate, so there is nothing to reboot into.")
+    goal = ["dry-activate"] if dry_activate else ["apply"]
+    cmd = ["colmena", *goal, "--impure", "--on", selector]
     if reboot:
         cmd.append("--reboot")
     run_shell(cmd, interactive=True, log_label=f"deploy-host-{selector}")
