@@ -145,6 +145,10 @@
     in
     {
       inherit fleetEval hosts deployable nixosConfigurations;
+      # Exposed so a consumer can hand the same helper surface to code that is
+      # neither a NixOS module nor a manifest module — flake-level `nix run`
+      # utilities, for instance, which are plain imports with explicit args.
+      inherit fleetLib;
 
       fleetManifest = fleetEval.compute;
       fleetAccess   = fleetEval.access;
