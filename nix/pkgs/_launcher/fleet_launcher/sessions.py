@@ -8,9 +8,9 @@ so the operator can:
   - Re-attach to watch progress at any time
   - Prevent accidental double-deploys of the same target
 
-Session naming convention: ``sk-<family>-<target>`` (e.g.
-``sk-deploy-netgate``, ``sk-tf-apply-platform-bootstrap``). Prefix
-``sk-`` lets us find all fleet-owned sessions with a single glob.
+Session naming convention: ``fleet-<family>-<target>`` (e.g.
+``fleet-deploy-netgate``, ``fleet-tf-apply-platform-bootstrap``). Prefix
+``fleet-`` lets us find all fleet-owned sessions with a single glob.
 
 Opt out via ``--no-session`` on any supporting command or the
 ``FLEET_NO_SESSION=1`` env var (for CI / scripts).
@@ -233,14 +233,28 @@ class _SessionInfo:
     exit_code: int | None
 
 
-def _collect_sessions(prefix: str = "sk-") -> list[_SessionInfo]:
+# New sessions are only ever created with SESSION_PREFIX. LEGACY_PREFIX is
+# matched on *discovery* so `fleet sessions list/kill` can still see and reap
+# sk-* sessions that a pre-INFRA-218 build left running. Drop it with the
+# _util env shim (2026-12-01) — by then no such session can still exist.
+SESSION_PREFIX = "fleet-"
+LEGACY_SESSION_PREFIX = "sk-"
+
+
+def _matches_prefix(name: str, prefix: str) -> bool:
+    if name.startswith(prefix):
+        return True
+    return prefix == SESSION_PREFIX and name.startswith(LEGACY_SESSION_PREFIX)
+
+
+def _collect_sessions(prefix: str = SESSION_PREFIX) -> list[_SessionInfo]:
     result = subprocess.run(["tmux", "ls"], capture_output=True, text=True)
     if result.returncode != 0:
         return []
     infos: list[_SessionInfo] = []
     for line in result.stdout.splitlines():
         name = line.split(":", 1)[0]
-        if not name.startswith(prefix):
+        if not _matches_prefix(name, prefix):
             continue
         alive = _session_alive(name)
         dump = _pane_capture(name, 30)
@@ -269,7 +283,7 @@ def sessions_cli() -> None:
 
 
 @sessions_cli.command("list")
-@click.option("--prefix", default="sk-", help="Session name prefix filter.")
+@click.option("--prefix", default=SESSION_PREFIX, help="Session name prefix filter.")
 def sessions_list(prefix: str) -> None:
     """One-row-per-session overview (state, last line)."""
     infos = _collect_sessions(prefix)
@@ -299,9 +313,9 @@ def sessions_attach(name: str) -> None:
 @sessions_cli.command("kill")
 @click.argument("name")
 def sessions_kill(name: str) -> None:
-    """Kill a specific session, or 'all' for every sk-* session."""
+    """Kill a specific session, or 'all' for every fleet-* session."""
     if name == "all":
-        for info in _collect_sessions("sk-"):
+        for info in _collect_sessions(SESSION_PREFIX):
             subprocess.run(["tmux", "kill-session", "-t", info.name])
             console.print(f"killed {info.name}")
         return
@@ -313,7 +327,7 @@ def sessions_kill(name: str) -> None:
 
 
 @sessions_cli.command("status")
-@click.option("--prefix", default="sk-")
+@click.option("--prefix", default=SESSION_PREFIX)
 def sessions_status(prefix: str) -> None:
     """Alias of list — match scripts/tmux-deploy.sh UX."""
     ctx = click.get_current_context()

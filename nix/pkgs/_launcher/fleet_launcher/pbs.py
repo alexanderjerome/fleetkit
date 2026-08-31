@@ -280,7 +280,7 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
         return
 
     excl = "".join(f" --exclude-path {p}" for p in exclude_paths)
-    unit = f"sk-backup-{vmid}"
+    unit = f"fleet-backup-{vmid}"
     logfile = f"/var/log/{unit}.log"
     vzcmd = (f"vzdump {vmid} --storage {storage} --mode {mode} "
              f"--notes-template '{notes}'{excl}")

@@ -326,7 +326,7 @@ def pve():
 @click.argument("host", required=True)
 @click.option(
     "--out-dir",
-    default="/tmp/sk-pve-install",
+    default="/tmp/fleet-pve-install",
     show_default=True,
     type=click.Path(file_okay=False, dir_okay=True),
     help="Where to write the per-VM answer.toml + answer.iso locally.",
@@ -385,7 +385,7 @@ def install(
     \b
     Flow:
       1. Render answer.toml for HOST from inline config
-      2. Build /tmp/sk-pve-install/answer-HOST.iso (ISO9660, label
+      2. Build /tmp/fleet-pve-install/answer-HOST.iso (ISO9660, label
          `proxmox-ais`, containing answer.toml at root)
       3. (if --serve) Start local HTTP server at --serve-bind:--serve-port
          hosting the .iso

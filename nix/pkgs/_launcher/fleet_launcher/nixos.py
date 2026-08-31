@@ -194,7 +194,7 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
     multiple deploys can run concurrently. Inspect with:
 
       fleet sessions list
-      fleet sessions attach sk-deploy-<name>
+      fleet sessions attach fleet-deploy-<name>
 
     Use --no-session to run inline. Use --ip to override the default
     hosts.json IP.
@@ -208,7 +208,7 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
         dispatched_any = False
         failed: list[tuple[str, int]] = []
         for name in names:
-            session_name = f"sk-deploy-{name}"
+            session_name = f"fleet-deploy-{name}"
             if running_inside(session_name):
                 # Inner session — fall through to inline deploy below.
                 continue
