@@ -44,4 +44,14 @@
 
   # PVE installer ISO assembly. Needs pkgs, hence this file taking it.
   pveIso = import ./pve-iso.nix { inherit pkgs lib; };
+
+  # Terraform-side builders. These are used from FLEET MANIFEST modules
+  # (nix/fleet/**, nix/hosts/** manifest halves), not from NixOS modules —
+  # which is why mkFleet injects this surface into the fleet evalModules as
+  # well as into every host. A consumer declaring Grafana Cloud synthetic
+  # checks needs mkHttpCheck at manifest-eval time, long before any NixOS
+  # module argument exists.
+  tf = {
+    grafana = import ./tf/grafana.nix { inherit lib; };
+  };
 }

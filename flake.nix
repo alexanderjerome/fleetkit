@@ -80,8 +80,14 @@
 
       # Single fleet eval — the source of truth for every host's
       # vm_id / ip / internal_ip / tags / kind and the leaf stacks.
+      # fleetLib is injected into the MANIFEST eval too, not just into NixOS
+      # hosts: consumer manifest modules (Grafana Cloud checks, PVE notes)
+      # need the same builders at fleet-eval time, where no NixOS module
+      # argument exists yet.
+      fleetLib = import ./nix/lib/module-args.nix { lib = nixpkgs.lib; inherit pkgs; };
+
       fleetEval = (nixpkgs.lib.evalModules {
-        modules = [ ./nix/fleet ] ++ modules;
+        modules = [ ./nix/fleet { _module.args.fleetLib = fleetLib; } ] ++ modules;
       }).config.fleet;
 
       hosts =
@@ -114,9 +120,7 @@
         # same builders framework modules use (sops secret declaration, grafana
         # dashboards, PVE notes, …) without vendoring a copy or path-importing
         # into this flake's store path. See nix/lib/module-args.nix.
-        ({ pkgs, lib, ... }: {
-          _module.args.fleetLib = import ./nix/lib/module-args.nix { inherit lib pkgs; };
-        })
+        { _module.args.fleetLib = fleetLib; }
       ] ++ nixpkgs.lib.optional (secretsFile != null)
         { sops.defaultSopsFile = secretsFile; }
       ++ modules ++ globalModules;
