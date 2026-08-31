@@ -281,8 +281,10 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
     if dry_activate and reboot:
         raise click.UsageError("--dry-activate and --reboot are mutually exclusive: "
                                "a dry run does not activate, so there is nothing to reboot into.")
-    goal = ["dry-activate"] if dry_activate else ["apply"]
-    cmd = ["colmena", *goal, "--impure", "--on", selector]
+    # `colmena apply [goal]` — the goal is a POSITIONAL argument to apply
+    # (build|push|switch|boot|test|dry-activate|keys), not a subcommand.
+    cmd = ["colmena", "apply", *(["dry-activate"] if dry_activate else []),
+           "--impure", "--on", selector]
     if reboot:
         cmd.append("--reboot")
     run_shell(cmd, interactive=True, log_label=f"deploy-host-{selector}")
