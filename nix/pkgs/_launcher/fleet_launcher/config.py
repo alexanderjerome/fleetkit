@@ -156,11 +156,20 @@ def load_extensions(root_group: click.Group) -> None:
     """Register consumer command groups onto the root CLI.
 
     Every `*.py` in `[cli].extensions_dir` (default `cli-ext/`, relative
-    to the repo root) is imported; each file exposes `COMMANDS`, a list
-    of click commands/groups to add. This is how a consumer repo keeps
-    company-specific tooling (app test harnesses, product-specific
-    operator commands such as a pricing-catalog CLI, …) on the same
-    `fleet` entry point without forking the framework.
+    to the repo root) is imported. Each file may expose either or both of:
+
+      COMMANDS = [cmd, ...]            added to the ROOT group
+                                       -> `fleet <cmd>`
+      ATTACH   = {"devtools": [cmd]}   added to an EXISTING framework group
+                                       -> `fleet devtools <cmd>`
+
+    This is how a consumer repo keeps company-specific tooling (app test
+    harnesses, product-specific operator commands such as a pricing-catalog
+    CLI, …) on the same `fleet` entry point without forking the framework.
+
+    Neither a broken extension file nor an ATTACH naming a group that does
+    not exist is fatal — both warn and continue. A consumer's tooling must
+    never be able to brick the deployment CLI.
     """
     ext_dir = repo_root() / get("cli.extensions_dir", "cli-ext")
     if not ext_dir.is_dir():
@@ -180,3 +189,25 @@ def load_extensions(root_group: click.Group) -> None:
             continue
         for cmd in getattr(module, "COMMANDS", []):
             root_group.add_command(cmd)
+
+        # ATTACH lets an extension hang commands off an EXISTING framework
+        # group rather than the root — `{"devtools": [cmd, ...]}` puts them
+        # under `fleet devtools <cmd>`. Without this a consumer can only add
+        # top-level groups, which forces unrelated company tooling up into
+        # the root namespace purely because the mechanism could not reach a
+        # subgroup. Found porting Skrybit's CLI (INFRA-227): 8 of its 12
+        # extension commands belonged under devtools.
+        #
+        # An unknown parent is a warning, not a crash: the same rule as a
+        # broken extension file — consumer tooling must not brick the CLI.
+        for parent_name, cmds in getattr(module, "ATTACH", {}).items():
+            parent = root_group.get_command(None, parent_name)  # type: ignore[arg-type]
+            if not isinstance(parent, click.Group):
+                click.echo(
+                    f"warning: {py.name} wants to attach to '{parent_name}', "
+                    f"which is not a command group on this CLI",
+                    err=True,
+                )
+                continue
+            for cmd in cmds:
+                parent.add_command(cmd)
