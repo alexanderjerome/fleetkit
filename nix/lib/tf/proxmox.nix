@@ -188,17 +188,6 @@ let
         ];
       };
     }
-    else if mode == "custom-btc-testnet" then {
-      network_interface = [(nic { name = "eth0"; bridge = "vmbr1"; })];
-      initialization = {
-        hostname = meta._name;
-        dns = dnsConfig;
-        ip_config = [{
-          ipv4 = { address = internalCidr meta.internal_ip; } // optGw net.gateway;
-          ipv6 = { address = "auto"; };
-        }];
-      };
-    }
     # single-internal plus a SECOND NIC on the same flat-L2 internal
     # bridge, carrying a pinned MAC. The use case is an ingress identity
     # a LAN-router port-forward targets by MAC: the host keeps its normal

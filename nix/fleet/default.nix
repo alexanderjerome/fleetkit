@@ -349,7 +349,7 @@ in {
       type = lib.types.listOf lib.types.str;
       default = [
         "bitcoin" "indexer" "postgres" "timescaledb"
-        "supabase" "messaging" "auth" "backup" "storage"
+        "messaging" "auth" "backup" "storage"
       ];
       description = "Tags whose presence forces protect=true (enforced by validator).";
     };
