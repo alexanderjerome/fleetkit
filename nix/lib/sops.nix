@@ -11,7 +11,7 @@
 
 { lib }:
 
-{
+let
   # Declare a sops secret from the consumer's default sops file.
   # Optional `owner` + `mode` pass through to sops-nix; the file is
   # deployed under /run/secrets/<path> with those perms. Default owner
@@ -53,6 +53,10 @@
   # Same arguments as mkSecret; an explicit sopsFile still wins, so a single
   # odd secret can escape the binding without abandoning it.
   withFile = file: args: mkSecret ({ sopsFile = file; } // args);
+in
+{
+  inherit mkSecret withFile;
+
 
   # Tag a secret for export into Infisical (the developer-facing read
   # replica). Returns the metadata consumed by the `infisical` sops.secrets
