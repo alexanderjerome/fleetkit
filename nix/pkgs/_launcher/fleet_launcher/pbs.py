@@ -291,7 +291,7 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
     launch = (
         f"systemctl reset-failed {unit} 2>/dev/null; "
         f"systemd-run --unit={unit} --service-type=oneshot bash -c "
-        f"'{vzcmd} > {logfile} 2>&1; echo SK_BACKUP_EXIT=$? >> {logfile}'"
+        f"'{vzcmd} > {logfile} 2>&1; echo FLEET_BACKUP_EXIT=$? >> {logfile}'"
     )
     console.print(f"[dim]{node_ip}: launching {unit} (detached)[/dim]")
     r = _ssh(node_ip, launch)
@@ -304,13 +304,16 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
     exit_code = None
     while exit_code is None:
         res = _ssh(node_ip,
-                   f"grep -q SK_BACKUP_EXIT {logfile} && tail -4 {logfile} || tail -1 {logfile}")
+                   # `SK_` alternate: tolerate a backup still in flight that was
+                   # launched by a pre-INFRA-218 build. Drop with the env shim.
+                   f"grep -qE '(FLEET|SK)_BACKUP_EXIT' {logfile} "
+                   f"&& tail -4 {logfile} || tail -1 {logfile}")
         out = (res.stdout or "").strip()
         line = out.splitlines()[-1] if out else ""
         if line and line != last:
             console.print(f"  {line}")
             last = line
-        m = re.search(r"SK_BACKUP_EXIT=(\d+)", out)
+        m = re.search(r"(?:FLEET|SK)_BACKUP_EXIT=(\d+)", out)
         if m:
             exit_code = int(m.group(1))
             break

@@ -13,7 +13,7 @@ Session naming convention: ``sk-<family>-<target>`` (e.g.
 ``sk-`` lets us find all fleet-owned sessions with a single glob.
 
 Opt out via ``--no-session`` on any supporting command or the
-``SK_NO_SESSION=1`` env var (for CI / scripts).
+``FLEET_NO_SESSION=1`` env var (for CI / scripts).
 """
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ from typing import Iterable
 import click
 from rich.console import Console
 from rich.table import Table
+
+from ._util import env_get
 
 console = Console()
 
@@ -103,7 +105,7 @@ def _pane_capture(name: str, lines: int = 100) -> str:
 # ── Core wrapping primitive ──────────────────────────────────────────
 
 def running_inside(session_name: str) -> bool:
-    return os.environ.get("SK_SESSION_NAME") == session_name
+    return env_get("FLEET_SESSION_NAME") == session_name
 
 
 def dispatch_session(
@@ -116,7 +118,7 @@ def dispatch_session(
 ) -> int:
     """Launch ``cmd`` inside a new detached tmux session.
 
-    - If called from INSIDE the target session (``SK_SESSION_NAME`` set),
+    - If called from INSIDE the target session (``FLEET_SESSION_NAME`` set),
       returns -1 so the caller can fall through to its inline path.
     - If the named session already exists and is alive, refuses with
       instructions to attach or kill.
@@ -125,7 +127,7 @@ def dispatch_session(
 
     Returns 0 on successful dispatch, non-zero on refusal / error.
     """
-    if os.environ.get("SK_NO_SESSION") == "1":
+    if env_get("FLEET_NO_SESSION") == "1":
         return -1
     if running_inside(session_name):
         return -1
@@ -146,10 +148,10 @@ def dispatch_session(
                        capture_output=True)
 
     # Build the shell command that runs inside the tmux pane.
-    # We set SK_SESSION_NAME so the inner `sk` invocation knows not to
+    # We set FLEET_SESSION_NAME so the inner `fleet` invocation knows not to
     # re-wrap itself, capture the exit code, write a sentinel, and hold
     # the pane open for scrollback.
-    env_parts = [f"SK_SESSION_NAME={shlex.quote(session_name)}"]
+    env_parts = [f"FLEET_SESSION_NAME={shlex.quote(session_name)}"]
     if env:
         for k, v in env.items():
             env_parts.append(f"{k}={shlex.quote(str(v))}")

@@ -297,13 +297,14 @@ def _maybe_reexec_for_missing_tools() -> None:
     PATH, transparently re-exec this same fleet binary through `nix develop`
     so both halves are present.
 
-    Opt-out: SK_NO_REEXEC=1. Loop guard: SK_REEXECED=1.
+    Opt-out: FLEET_NO_REEXEC=1. Loop guard: FLEET_REEXECED=1.
     """
     import os
     import shutil
     import sys
 
-    if os.environ.get("SK_NO_REEXEC") == "1" or os.environ.get("SK_REEXECED") == "1":
+    from ._util import env_get
+    if env_get("FLEET_NO_REEXEC") == "1" or env_get("FLEET_REEXECED") == "1":
         return
 
     argv = sys.argv[1:]
@@ -325,7 +326,7 @@ def _maybe_reexec_for_missing_tools() -> None:
     sys.stderr.write(
         f"fleet: {', '.join(missing)} not on PATH — re-entering devshell "
         f"(nix develop {root})…\n")
-    os.environ["SK_REEXECED"] = "1"
+    os.environ["FLEET_REEXECED"] = "1"
     os.execvp("nix", ["nix", "develop", str(root), "--command",
                       sk_executable(), *argv])
 

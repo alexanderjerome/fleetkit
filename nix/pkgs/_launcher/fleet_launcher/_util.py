@@ -13,6 +13,46 @@ from datetime import datetime
 from pathlib import Path
 
 
+# ── Environment variables (INFRA-218) ────────────────────────────────
+# Framework env vars are FLEET_*. Before the extraction they carried the
+# originating company's initials (SK_*); those names are still ACCEPTED as
+# a deprecated fallback, because the failure mode of a hard rename is
+# silent: an operator shell or CI job exporting SK_NO_SESSION=1 would keep
+# running and quietly start spawning tmux sessions again.
+#
+#   ┌──────────────────────────────────────────────────────────────┐
+#   │ TEMPORARY COMPATIBILITY SHIM — DELETE AFTER 2026-12-01.       │
+#   │ Remove _LEGACY_ENV_* and inline os.environ.get() at the read  │
+#   │ sites; nothing in the framework ever *writes* an SK_* name.   │
+#   └──────────────────────────────────────────────────────────────┘
+_LEGACY_ENV_PREFIX = "SK_"
+_LEGACY_ENV_SUNSET = "2026-12-01"
+_legacy_env_warned: set[str] = set()
+
+
+def env_get(name: str, default: str | None = None) -> str | None:
+    """Read a ``FLEET_*`` env var, falling back to the deprecated ``SK_*`` name.
+
+    The fallback warns once per variable per process and disappears on the
+    sunset date above. Always pass the *new* name; the legacy name is
+    derived from it.
+    """
+    val = os.environ.get(name)
+    if val is not None:
+        return val
+    legacy = _LEGACY_ENV_PREFIX + name.removeprefix("FLEET_")
+    val = os.environ.get(legacy)
+    if val is None:
+        return default
+    if legacy not in _legacy_env_warned:
+        _legacy_env_warned.add(legacy)
+        sys.stderr.write(
+            f"fleet: DEPRECATED env var {legacy} is set — rename it to {name}. "
+            f"The {legacy} fallback is removed after {_LEGACY_ENV_SUNSET}.\n"
+        )
+    return val
+
+
 # Strips ANSI escape sequences (color, cursor movement, etc.) — used to
 # produce a human-readable `.clean.log` sibling for logs captured by script(1).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -41,7 +81,7 @@ def _write_clean_log(raw_log: Path) -> Path | None:
 
 
 # Signal words that mark "something went wrong" in deploy/build output.
-# Case-insensitive. Extended via SK_ERROR_PATTERN env var (regex, overrides).
+# Case-insensitive. Extended via FLEET_ERROR_PATTERN env var (regex, overrides).
 # "command not found" / COMMAND_EXIT_CODE cover the rc=127 "colmena not on
 # PATH" class that previously produced an empty errors log (INFRA-171).
 _DEFAULT_ERROR_PATTERN = (
@@ -51,14 +91,14 @@ _DEFAULT_ERROR_PATTERN = (
 
 
 def _error_pattern() -> re.Pattern[str]:
-    user_pat = os.environ.get("SK_ERROR_PATTERN")
+    user_pat = env_get("FLEET_ERROR_PATTERN")
     return re.compile(user_pat or _DEFAULT_ERROR_PATTERN, re.IGNORECASE if not user_pat else 0)
 
 
 def _write_errors_log(clean_log: Path) -> tuple[Path, bool] | None:
     """Produce a sibling `<name>.errors.log` starting at the first error line.
 
-    Captures from the first match of ``SK_ERROR_PATTERN`` (or the default
+    Captures from the first match of ``FLEET_ERROR_PATTERN`` (or the default
     pattern covering ERROR/failed/exited/Traceback/etc.) through end of file.
     On a clean run the file contains a single line marking no errors detected.
 
@@ -249,8 +289,8 @@ def run_shell(
     Rust-based tools (colmena) emit backtraces on panic.
 
     Environment opt-outs:
-      SK_NO_LOG=1        disable log-to-file capture
-      SK_NO_BACKTRACE=1  don't set RUST_BACKTRACE=1
+      FLEET_NO_LOG=1        disable log-to-file capture
+      FLEET_NO_BACKTRACE=1  don't set RUST_BACKTRACE=1
 
     ``log_label`` overrides the log filename prefix (default: cmd[0]).
 
@@ -262,10 +302,10 @@ def run_shell(
 
     # Propagate a Rust backtrace by default so colmena panics are diagnosable
     env = os.environ.copy()
-    if os.environ.get("SK_NO_BACKTRACE") != "1":
+    if env_get("FLEET_NO_BACKTRACE") != "1":
         env.setdefault("RUST_BACKTRACE", "1")
 
-    log_enabled = os.environ.get("SK_NO_LOG") != "1"
+    log_enabled = env_get("FLEET_NO_LOG") != "1"
 
     if interactive:
         log_path: Path | None = None
@@ -317,7 +357,7 @@ def run_shell(
                         except OSError:
                             content = ""
                         lines = content.splitlines()
-                        max_echo = int(os.environ.get("SK_ERROR_ECHO_LINES", "60"))
+                        max_echo = int(env_get("FLEET_ERROR_ECHO_LINES", "60"))
                         sys.stderr.write("\n─── error context (first "
                                          f"{min(len(lines), max_echo)} lines "
                                          f"from {errors_path.name}) ───\n")
