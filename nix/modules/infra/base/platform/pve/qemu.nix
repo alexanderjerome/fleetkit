@@ -14,8 +14,8 @@
 
     # virtio_blk is required for Proxmox VMs — disks attach as
     # virtio-blk-pci (not virtio-scsi). Without it stage-1 hangs on
-    # "waiting for /dev/vda1". Discovered during the SKRYBITDEV-301
-    # netgate recovery.
+    # "waiting for /dev/vda1". Discovered the hard way while
+    # recovering an unbootable netgate VM.
     boot.loader.grub.enable = true;
     boot.loader.grub.device = "/dev/vda";
     boot.initrd.availableKernelModules = [
