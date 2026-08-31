@@ -24,12 +24,35 @@
   # sops.secrets entry; sops-nix ignores it. Omit it = infra-only, the
   # secret never leaves SOPS. Non-destructive: existing callers are
   # unchanged and default to infra-only.
-  mkSecret = { restartUnits ? [], owner ? null, group ? null, mode ? null, infisical ? null }:
+  # `sopsFile` (default null) overrides which encrypted file this secret is
+  # read from, instead of the consumer's sops.defaultSopsFile. Null keeps the
+  # single-file behaviour, so existing consumers are untouched.
+  #
+  # This is what makes a SPLIT secret store possible: one file per resource,
+  # each encrypted to only the hosts that need it, so a compromised container
+  # cannot decrypt the whole fleet. With a single defaultSopsFile every host
+  # necessarily holds a key to every secret.
+  #
+  # Prefer `withFile` below over passing sopsFile at each call site — a
+  # module usually reads several secrets from the same file, and repeating
+  # the path is how one of them silently ends up pointing at the wrong one.
+  mkSecret = { restartUnits ? [], owner ? null, group ? null, mode ? null,
+               infisical ? null, sopsFile ? null }:
     { inherit restartUnits; }
     // lib.optionalAttrs (owner != null) { inherit owner; }
     // lib.optionalAttrs (group != null) { inherit group; }
     // lib.optionalAttrs (mode != null)  { inherit mode; }
-    // lib.optionalAttrs (infisical != null) { inherit infisical; };
+    // lib.optionalAttrs (infisical != null) { inherit infisical; }
+    // lib.optionalAttrs (sopsFile != null) { inherit sopsFile; };
+
+  # Bind mkSecret to one encrypted file:
+  #
+  #   let s = sopsLib.withFile ../secrets/btc-nodes.yaml;
+  #   in { sops.secrets."btc-nodes/mainnet/rpc_password" = s { owner = "bitcoind"; }; }
+  #
+  # Same arguments as mkSecret; an explicit sopsFile still wins, so a single
+  # odd secret can escape the binding without abandoning it.
+  withFile = file: args: mkSecret ({ sopsFile = file; } // args);
 
   # Tag a secret for export into Infisical (the developer-facing read
   # replica). Returns the metadata consumed by the `infisical` sops.secrets
