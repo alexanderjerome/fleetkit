@@ -78,6 +78,12 @@
       # (meta.nodeNixpkgs, e.g. one CUDA host) and similar colmena-only
       # knobs mkFleet has no first-class argument for.
       colmenaMeta ? {},
+      # Extra specialArgs for every host eval (nixosConfigurations AND
+      # colmena). Use for values that must be visible during module
+      # IMPORT resolution — e.g. `inputs` when host modules do
+      # `imports = [ "''${inputs.nixpkgs}/nixos/modules/..." ]`.
+      # (_module.args is config-stage only; it cannot feed imports.)
+      specialArgs ? {},
       colmenaOverlays ? [],
       system ? "x86_64-linux",
       sopsAgeKeyCommand ? [ "sh" "-c" "cat \"$HOME/.ssh/sops-age.key\"" ],
@@ -171,7 +177,7 @@
       slugOf = id: nixpkgs.lib.replaceStrings [ "." ] [ "-" ] id;
 
       nixosConfigurations = nixLib.mkNixosConfigurations {
-        inherit hosts;
+        inherit hosts specialArgs;
         globalModules = baseGlobalModules;
       };
     in
@@ -191,7 +197,8 @@
             localSystem = system;
             overlays = colmenaOverlays;
           };
-        } // colmenaMeta;
+        } // nixpkgs.lib.optionalAttrs (specialArgs != {}) { inherit specialArgs; }
+          // colmenaMeta;
       } // nixLib.mkColmenaNodes {
         hosts = deployable;
         globalModules = baseGlobalModules;

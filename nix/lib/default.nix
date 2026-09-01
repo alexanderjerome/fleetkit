@@ -152,9 +152,10 @@ in
     standaloneHosts // clusterHosts;
 
   # Build nixosConfigurations from the hosts attrset.
-  mkNixosConfigurations = { hosts, globalModules ? [] }:
+  mkNixosConfigurations = { hosts, globalModules ? [], specialArgs ? {} }:
     builtins.mapAttrs (_name: h:
       nixpkgs.lib.nixosSystem {
+        inherit specialArgs;
         modules = globalModules ++ h.modules ++ [
           ({ ... }: {
             nixpkgs.hostPlatform = "x86_64-linux";
