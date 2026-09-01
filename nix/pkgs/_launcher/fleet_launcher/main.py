@@ -215,6 +215,11 @@ def _setup_env() -> None:
         inventory_sources.append(str(consumer_ansible / "inventory"))
     os.environ.setdefault("ANSIBLE_INVENTORY", ",".join(inventory_sources))
     os.environ.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
+    # Stable anchor for consumer inventory vars: with chained inventories
+    # ansible's inventory_dir is ambiguous (it names the source of the
+    # CURRENT host — usually the generated file's dir), so group_vars
+    # path values anchor on this instead: lookup('env','FLEET_REPO_ROOT').
+    os.environ.setdefault("FLEET_REPO_ROOT", str(root))
     os.environ.setdefault(
         "TF_PLUGIN_CACHE_DIR",
         os.path.expanduser("~/.cache/opentofu/plugin-cache"))
