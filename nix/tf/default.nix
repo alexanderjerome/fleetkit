@@ -1,4 +1,4 @@
-{ stackId, backend, fleetModules ? [], ... }:
+{ stackId, backend, fleetModules ? [], fleetLib ? null, ... }:
 
 # Top-level terranix module for a single leaf stack.
 #
@@ -24,6 +24,14 @@ in
   # stackId flows to every imported module via module args.
   _module.args = {
     inherit stackId;
+    # THIRD eval path for the consumer's manifest modules. mkFleet injects
+    # fleetLib into the manifest eval and into every NixOS host; terranix
+    # evaluates the SAME modules again here, so a consumer manifest module
+    # that uses fleetLib (a Grafana Cloud check, a vaultwarden allowlist)
+    # fails with "attribute 'fleetLib' missing" unless it is injected here
+    # too. Found the hard way: colmena and the devshell both stayed green
+    # while `nix build .#tf-<stack>` broke.
+    inherit fleetLib;
     _fleetValidated = config.fleet._meta.validated;
   };
 

@@ -130,7 +130,7 @@
       mkTerranixStack = stackId: terranix.lib.terranixConfiguration {
         inherit system;
         modules = [ (import ./nix/tf {
-          inherit stackId backend;
+          inherit stackId backend fleetLib;
           fleetModules = modules;
         }) ];
       };
