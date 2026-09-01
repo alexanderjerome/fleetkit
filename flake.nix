@@ -182,6 +182,16 @@
           settings-json = pkgs.writeText "fleet-settings.json"
             (builtins.toJSON fleetEval.settings);
 
+          # The secrets CATALOG — structure and routing only, never values:
+          # resource → file path, instances, consumers, env naming, key
+          # names. Read by `fleet secrets env-export` and sync tooling so
+          # neither needs a Nix eval of its own (nor a decryption key just
+          # to know what exists).
+          secrets-catalog-json = pkgs.writeText "fleet-secrets-catalog.json"
+            (builtins.toJSON (nixpkgs.lib.mapAttrs (_: r:
+              (removeAttrs r [ "file" ]) // { file = toString (r.file or null); })
+              fleetEval.secrets));
+
         }
         # One `tf-<env>-<stack>` package per leaf stack:
         # `nix build .#tf-platform-core` → config.tf.json for tofu.
