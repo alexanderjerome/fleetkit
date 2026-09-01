@@ -162,7 +162,12 @@
         }) ] ++ (tfExtraModules.${stackId} or []);
       };
 
-      leafStackIds = nixpkgs.lib.attrNames fleetEval.stacks;
+      # tfExtraModules keys are stacks too — a stack may consist solely
+      # of raw terranix modules (e.g. a router's uci config) with no
+      # fleet-schema entries behind it.
+      leafStackIds = nixpkgs.lib.unique
+        (nixpkgs.lib.attrNames fleetEval.stacks
+         ++ nixpkgs.lib.attrNames tfExtraModules);
       slugOf = id: nixpkgs.lib.replaceStrings [ "." ] [ "-" ] id;
 
       nixosConfigurations = nixLib.mkNixosConfigurations {
