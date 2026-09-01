@@ -397,7 +397,14 @@ def run_cmd(playbook: str, limit: str | None, tags: str | None, check: bool,
                 break
     env.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
 
-    cmd = ["ansible-playbook", "-i", str(inv), str(resolved)]
+    cmd = ["ansible-playbook", "-i", str(inv)]
+    # Chain the consumer's inventory dir (group_vars/ + host_vars/ +
+    # static.yml) AFTER the generated inventory — explicit -i flags
+    # override $ANSIBLE_INVENTORY, so the chaining must happen here too;
+    # later sources win merges, so consumer data prevails.
+    if (consumer_inv := root / "ansible" / "inventory").is_dir():
+        cmd += ["-i", str(consumer_inv)]
+    cmd.append(str(resolved))
     if limit:
         cmd += ["--limit", limit]
     if tags:
