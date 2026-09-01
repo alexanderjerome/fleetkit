@@ -167,14 +167,26 @@ in
         inherit specialArgs;
         modules = globalModules ++ h.modules ++ [
           ({ ... }: {
-            nixpkgs.hostPlatform = "x86_64-linux";
-            networking.hostName = h.hostname;
-            # Colmena injects `nodes` (the whole hive) via specialArgs;
-            # this plain-nixosSystem path has no hive, so give modules
-            # that consume `nodes` (e.g. nix/modules/infra/data/pgweb) an empty
-            # one. Colmena's eval never sees this module, so there is
-            # no conflict with the real value.
-            _module.args.nodes = {};
+            # Colmena declares `deployment.*`; accept (and discard) it
+            # here so host modules may set colmena-only knobs
+            # (buildOnTarget, keys, …) without breaking the
+            # plain-nixosSystem eval path.
+            options.deployment = nixpkgs.lib.mkOption {
+              type = nixpkgs.lib.types.attrsOf nixpkgs.lib.types.raw;
+              default = {};
+              internal = true;
+              description = "Colmena deployment options — inert in plain nixosConfigurations.";
+            };
+            config = {
+              nixpkgs.hostPlatform = "x86_64-linux";
+              networking.hostName = h.hostname;
+              # Colmena injects `nodes` (the whole hive) via specialArgs;
+              # this plain-nixosSystem path has no hive, so give modules
+              # that consume `nodes` (e.g. nix/modules/infra/data/pgweb) an
+              # empty one. Colmena's eval never sees this module, so there
+              # is no conflict with the real value.
+              _module.args.nodes = {};
+            };
           })
         ];
       }
