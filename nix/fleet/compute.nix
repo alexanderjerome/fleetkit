@@ -582,6 +582,19 @@ let
         description = "Bridge the legacy `single-internal` mode attaches eth0 to. null = vmbr1, or vmbr0 when the provider instance is listed in fleet.settings.providers.proxmox.singleBridgeInstances. (Declared-mode hosts set the bridge per interface instead.)";
       };
 
+      provides = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "proxmox.prod";
+        description = "This machine IS a member (node) of the named provider instance — the ADR-096 recursive estate link. Its resource name must equal the member/node name it provides. Drives derived hypervisor scrape targets and layer-dependency queries.";
+      };
+
+      bootOrder = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum [ "cnd" "dnc" ]);
+        default = null;
+        description = "XO VMs: explicit boot order (c=disk n=network d=dvd); null derives from tags (transient => dnc). Authored form of what the post-create boot-order hook applies.";
+      };
+
       mac_address_eth1 = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
