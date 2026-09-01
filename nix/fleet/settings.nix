@@ -278,16 +278,21 @@
     };
 
     backend = {
+      type = lib.mkOption {
+        type = lib.types.enum [ "s3" "local" ];
+        default = "s3";
+        description = "Tofu state backend kind. \"local\" keeps terraform.tfstate inside each stack's working dir (.tf/<slug>/) — no bucket, no cloud creds; fine for a homelab, but the state only exists on the machine that ran the apply. \"s3\" (default) is the shared-bucket estate model (ADR-097).";
+      };
       bucket = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "acme-tofu";
-        description = "Tofu S3 state bucket. Shared estate substrate (ADR-097) — fleet separation is the state KEY prefix, not the bucket. When set, mkFleet's `backend` argument may be omitted.";
+        description = "Tofu S3 state bucket (type = s3). Shared estate substrate (ADR-097) — fleet separation is the state KEY prefix, not the bucket. When set, mkFleet's `backend` argument may be omitted.";
       };
       region = lib.mkOption {
         type = lib.types.str;
         default = "us-east-1";
-        description = "AWS region of the state bucket.";
+        description = "AWS region of the state bucket (type = s3).";
       };
     };
 

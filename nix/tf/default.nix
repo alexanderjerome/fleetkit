@@ -37,12 +37,19 @@ in
 
   terraform = {
     required_version = ">= 1.10";
-    backend.s3 = {
-      bucket = backend.bucket;
-      key = "tf/${slug}/terraform.tfstate";
-      region = backend.region or "us-east-1";
-      use_lockfile = true;
-      encrypt = true;
-    };
-  };
+  } // (
+    # "local" keeps terraform.tfstate in the stack's working dir
+    # (.tf/<slug>/ — the tofu chdir), so no bucket or cloud creds are
+    # needed; the state then lives only on the applying machine.
+    if (backend.type or "s3") == "local" then {
+      backend.local = { path = "terraform.tfstate"; };
+    } else {
+      backend.s3 = {
+        bucket = backend.bucket;
+        key = "tf/${slug}/terraform.tfstate";
+        region = backend.region or "us-east-1";
+        use_lockfile = true;
+        encrypt = true;
+      };
+    });
 }

@@ -263,6 +263,9 @@ def _setup_env() -> None:
                 "endpoint": "PROXMOX_VE_ENDPOINT",
                 "username": "PROXMOX_VE_USERNAME",
                 "password": "PROXMOX_VE_PASSWORD",
+                # user@realm!token=uuid form — bpg's token auth; preferred
+                # over username/password where both are present.
+                "api_token": "PROXMOX_VE_API_TOKEN",
             }
             for key, env_var in mapping.items():
                 if key in pve:

@@ -602,6 +602,17 @@ let
         description = "This machine IS a member (node) of the named provider instance — the ADR-096 recursive estate link. Its resource name must equal the member/node name it provides. Drives derived hypervisor scrape targets and layer-dependency queries.";
       };
 
+      # INFRA-227: deprecated flat alias of `startup.order`. Prefer the
+      # structured `startup` option; the emitter feeds this into it when
+      # `startup` is unset. Kept so homelab consumers authoring the flat
+      # form keep working.
+      startup_order = lib.mkOption {
+        type = lib.types.nullOr lib.types.int;
+        default = null;
+        example = 3;
+        description = "Deprecated flat alias of `startup.order` — PVE LXC boot ordering (lower boots first). null = PVE default ordering. Prefer the structured `startup` option.";
+      };
+
       bootOrder = lib.mkOption {
         type = lib.types.nullOr (lib.types.enum [ "cnd" "dnc" ]);
         default = null;

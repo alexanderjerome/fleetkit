@@ -77,10 +77,20 @@ let
   # when it differs from what the emitter produced before the option
   # existed (protection off, startup unmanaged).
   lifecycleAttrs = meta:
+    let
+      # INFRA-227: `startup_order` is a deprecated flat alias of the
+      # structured `startup.order`. One knob renders here; the structured
+      # form wins when both are set.
+      effectiveStartup =
+        if (meta.startup or null) != null then meta.startup
+        else if (meta.startup_order or null) != null
+        then { order = meta.startup_order; up_delay = null; down_delay = null; }
+        else null;
+    in
     lib.optionalAttrs (meta.protection or false) { protection = true; }
-    // lib.optionalAttrs ((meta.startup or null) != null) {
+    // lib.optionalAttrs (effectiveStartup != null) {
       startup = lib.filterAttrs (_: v: v != null) {
-        inherit (meta.startup) order up_delay down_delay;
+        inherit (effectiveStartup) order up_delay down_delay;
       };
     };
 
@@ -327,6 +337,11 @@ in rec {
       # ostype; any other custom image stays "unmanaged".
       lxcOsType =
         if !hasCustomImage then "nixos"
+        # A consumer's OWN NixOS template (e.g. a nixos-generators
+        # proxmox-lxc image on local:) is still ostype nixos — PVE's
+        # NixOS setup plugin then writes the static IP at create time,
+        # same as the fleet template path.
+        else if lib.hasInfix "nixos" lxcTemplateFile then "nixos"
         else if lib.hasInfix "debian" lxcTemplateFile then "debian"
         else if lib.hasInfix "ubuntu" lxcTemplateFile then "ubuntu"
         else "unmanaged";
@@ -344,7 +359,10 @@ in rec {
       # inject via initialization.user_account so the operator can SSH
       # in immediately after first boot. Hostname is also set so the
       # LXC reports its name to DHCP / chrony / etc.
-      initConfig = lib.optionalAttrs hasCustomImage {
+      # NixOS images (fleet template OR a consumer's own) bake their
+      # operator key into the image; injecting user_account here too
+      # would only create import-parity drift on existing containers.
+      initConfig = lib.optionalAttrs (hasCustomImage && lxcOsType != "nixos") {
         initialization = {
           hostname = name;
           user_account = {

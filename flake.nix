@@ -68,6 +68,16 @@
       backend ? null,
       globalModules ? [],
       hostExtraModules ? {},
+      # Extra RAW terranix modules per stack ({ "<env>.<stack>" = [ module ]; }).
+      # The escape hatch for provider families fleetkit does not model
+      # (a router's uci provider, a one-off SaaS resource): the module is
+      # appended to that stack's terranix eval only — it never enters the
+      # fleet-schema eval, so plain `resource.*`/`provider.*` config is fine.
+      tfExtraModules ? {},
+      # Deep-merged into colmena's meta — for per-node package sets
+      # (meta.nodeNixpkgs, e.g. one CUDA host) and similar colmena-only
+      # knobs mkFleet has no first-class argument for.
+      colmenaMeta ? {},
       colmenaOverlays ? [],
       system ? "x86_64-linux",
       sopsAgeKeyCommand ? [ "sh" "-c" "cat \"$HOME/.ssh/sops-age.key\"" ],
@@ -96,11 +106,15 @@
       # ADR-097: backend argument > fleet.settings.backend, loudly none.
       backend' =
         if backend != null then backend
+        else if fleetEval.settings.backend.type == "local" then {
+          type = "local";
+        }
         else if fleetEval.settings.backend.bucket != null then {
+          type = "s3";
           bucket = fleetEval.settings.backend.bucket;
           region = fleetEval.settings.backend.region;
         }
-        else throw "mkFleet: no tofu state backend — set fleet.settings.backend.bucket (or pass mkFleet { backend = ...; })";
+        else throw "mkFleet: no tofu state backend — set fleet.settings.backend.bucket (or backend.type = \"local\", or pass mkFleet { backend = ...; })";
 
       hosts =
         let
@@ -145,7 +159,7 @@
           inherit stackId fleetLib;
           backend = backend';
           fleetModules = modules;
-        }) ];
+        }) ] ++ (tfExtraModules.${stackId} or []);
       };
 
       leafStackIds = nixpkgs.lib.attrNames fleetEval.stacks;
@@ -167,10 +181,12 @@
       fleetAccess   = fleetEval.access;
 
       colmena = {
-        meta.nixpkgs = import nixpkgs {
-          localSystem = system;
-          overlays = colmenaOverlays;
-        };
+        meta = {
+          nixpkgs = import nixpkgs {
+            localSystem = system;
+            overlays = colmenaOverlays;
+          };
+        } // colmenaMeta;
       } // nixLib.mkColmenaNodes {
         hosts = deployable;
         globalModules = baseGlobalModules;
