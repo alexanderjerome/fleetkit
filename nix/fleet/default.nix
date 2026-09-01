@@ -342,6 +342,7 @@ in {
     ./compute.nix
     ./resources.nix
     ./hosts-registry.nix
+    ./v2-normalize.nix       # ADR-096: provider-tree authoring → flat normal form
   ];
 
   options.fleet = {

@@ -13,8 +13,34 @@
 # Values are supplied by the consumer repo (fleetkit is schema-only here).
 
 let
+  v2 = import ../v2-types.nix { inherit lib; };
+
   providerInstanceType = lib.types.submodule ({ name, ... }: {
     options = {
+      # ── ADR-096: the provider-rooted resource tree ────────────────
+      # Machines and provider-scoped objects may be authored HERE, in
+      # place, instead of in the flat fleet.compute / fleet.resources
+      # namespaces. v2-normalize.nix lifts everything declared here into
+      # those flat options, so every emitter, validator and projection
+      # keeps working unchanged — the flat layer is becoming the derived
+      # normal form rather than the authoring surface.
+      nodes = lib.mkOption {
+        type = lib.types.attrsOf v2.nodeType;
+        default = {};
+        description = "Hypervisor members of this instance, as typed objects (mgmt_ip, placed machines). Complements cluster.nodes (names only); a name present in either counts as a member.";
+      };
+      resources = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = lib.types.attrsOf v2.looseKind;
+          options = {
+            lxc = lib.mkOption { type = v2.machines; default = {}; description = "Instance-scoped containers (single-node instances; multi-node clusters place under nodes.<n>)."; };
+            vm  = lib.mkOption { type = v2.machines; default = {}; description = "Instance-scoped VMs (XO VMs are pool-placed, so they belong here)."; };
+          };
+        };
+        default = {};
+        description = "Provider-scoped resources by kind — pools/acls/zones/checks per this provider's kind map (v2-types.nix), plus lxc/vm.";
+      };
+
       source = lib.mkOption {
         type = lib.types.str;
         example = "bpg/proxmox";
