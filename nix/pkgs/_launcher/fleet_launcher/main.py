@@ -204,8 +204,16 @@ def _setup_env() -> None:
             os.environ.setdefault("ANSIBLE_CONFIG", str(cfg))
             break
     from ._util import fleet_cache_dir
-    os.environ.setdefault(
-        "ANSIBLE_INVENTORY", str(fleet_cache_dir(root) / "ansible-inventory.yml"))
+    # Inventory: the GENERATED manifest-derived inventory first, then the
+    # consumer's ansible/inventory/ directory when it exists — that is
+    # where a consumer keeps group_vars/ + host_vars/ (+ a static.yml for
+    # out-of-manifest boxes), and ansible only loads those var dirs from
+    # inventory (or playbook) locations. Later sources win merges, so
+    # consumer data overrides generated groups on conflict.
+    inventory_sources = [str(fleet_cache_dir(root) / "ansible-inventory.yml")]
+    if (consumer_ansible / "inventory").is_dir():
+        inventory_sources.append(str(consumer_ansible / "inventory"))
+    os.environ.setdefault("ANSIBLE_INVENTORY", ",".join(inventory_sources))
     os.environ.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
     os.environ.setdefault(
         "TF_PLUGIN_CACHE_DIR",
