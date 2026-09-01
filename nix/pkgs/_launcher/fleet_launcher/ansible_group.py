@@ -107,8 +107,15 @@ def module_playbooks(root: Path | None = None) -> dict[str, Path]:
     if (mods := framework_modules_dir()) is not None:
         trees.append(mods)
     out: dict[str, Path] = {}
+    # A module-adjacent play's roles/ ride along beside it — their
+    # internal task/handler/defaults files are NOT playbooks and must
+    # not pollute name resolution.
+    skip_parents = {"roles", "tasks", "handlers", "defaults", "vars",
+                    "templates", "files", "meta"}
     for tree in trees:
         for p in sorted(tree.rglob("*.yml")):
+            if skip_parents & set(p.relative_to(tree).parts[:-1]):
+                continue
             if re.fullmatch(r"[a-z][a-z0-9-]*", p.stem):
                 out.setdefault(p.stem, p)
     return out
