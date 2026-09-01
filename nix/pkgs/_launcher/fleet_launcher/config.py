@@ -1,118 +1,188 @@
 """fleet_launcher.config — the consumer-repo configuration surface.
 
 fleetkit is environment-agnostic: every company/site-specific value the
-CLI needs lives in **fleet.toml at the consumer repo root**, not in
-code. This module finds and parses that file and hands out typed
-accessors with actionable errors.
+CLI needs is declared ONCE, in Nix (`fleet.settings`), and reaches this
+module through **the catalog** — `.cache/fleet/catalog.json`, a generated
+eval-free projection built by `nix build .#fleet-catalog` (ADR-097).
+
+fleet.toml is GONE. It was "the eval-free twin of fleet.settings …
+keep them in sync" — a manual-synchronization contract this module no
+longer offers. A lingering fleet.toml warns loudly and is ignored.
 
 Design notes:
-  * TOML (stdlib tomllib) and eval-free on purpose — the CLI must start
-    fast; anything needing a Nix eval belongs in fleet.settings on the
-    Nix side instead.
-  * Values that already had universal conventions keep them as defaults
-    (age key at ~/.ssh/sops-age.key, etc.) so a minimal fleet.toml stays
-    minimal; company identifiers (name, domains, state bucket) have NO
-    defaults and fail loudly when first used.
-
-Minimal fleet.toml:
-
-    [fleet]
-    name = "acme"
-
-    [domains]
-    base = "acme.dev"            # public zone
-    internal = "acme.lan"        # fleet-internal zone
-    tailnet_suffix = "hs.acme.dev"
-
-    [backend]
-    bucket = "acme-tofu"         # tofu S3 state bucket
-    region = "us-east-1"
-
-    [sops]
-    age_key_file = "~/.ssh/sops-age.key"
-    secrets_file = "nix/secrets/secrets.yaml"
-
-    [ssh]
-    sysadmin_key_file = "~/.ssh/sysadmin-key"
-
-    [cli]
-    extensions_dir = "cli-ext"   # consumer command groups (see load_extensions)
+  * Eval-free reads stay eval-free: the catalog is a cached artifact
+    (the hosts.json pattern), auto-materialized when missing and
+    refreshed when the repo's `nix/` tree hash changes. Set
+    FLEET_NO_CATALOG_REFRESH=1 to forbid the refresh (offline/CI).
+  * The dotted lookup paths (`domains.base`, `pve.install.serve_host`,
+    …) are preserved verbatim from the toml era, so get()/require()
+    call sites across the launcher are untouched.
+  * Operator-MACHINE paths are not fleet facts and are not in the
+    catalog: age key and sysadmin key resolve from FLEET_AGE_KEY_FILE /
+    FLEET_SYSADMIN_KEY_FILE, falling back to the conventional
+    ~/.ssh/sops-age.key / ~/.ssh/sysadmin-key.
+  * Repo root: $FLEET_ROOT, else `git rev-parse --show-toplevel`, else
+    walk up to a flake.nix, else CWD.
 """
 from __future__ import annotations
 
+import json
 import os
-import tomllib
+import subprocess
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import click
 
-CONFIG_FILENAME = "fleet.toml"
-ENV_CONFIG = "FLEET_CONFIG"  # explicit path override
-ENV_ROOT = "FLEET_ROOT"      # explicit repo-root override
+CATALOG_RELPATH = Path(".cache/fleet/catalog.json")
+ENV_CATALOG = "FLEET_CATALOG"            # explicit catalog-path override
+ENV_ROOT = "FLEET_ROOT"                  # explicit repo-root override
+ENV_NO_REFRESH = "FLEET_NO_CATALOG_REFRESH"
+ENV_AGE_KEY = "FLEET_AGE_KEY_FILE"
+ENV_SYSADMIN_KEY = "FLEET_SYSADMIN_KEY_FILE"
 
 
 class FleetConfigError(click.ClickException):
-    """Configuration problem the operator must fix in fleet.toml."""
-
-
-def _search_upwards(start: Path) -> Path | None:
-    for d in [start, *start.parents]:
-        if (d / CONFIG_FILENAME).is_file():
-            return d / CONFIG_FILENAME
-    return None
-
-
-@lru_cache(maxsize=1)
-def config_path() -> Path | None:
-    """Locate fleet.toml: $FLEET_CONFIG, else walk up from CWD."""
-    if env := os.environ.get(ENV_CONFIG):
-        p = Path(env).expanduser()
-        if not p.is_file():
-            raise FleetConfigError(f"$FLEET_CONFIG points at {p}, which does not exist")
-        return p
-    return _search_upwards(Path.cwd())
+    """Configuration problem the operator must fix in the fleet's Nix config."""
 
 
 @lru_cache(maxsize=1)
 def repo_root() -> Path:
-    """Consumer repo root: $FLEET_ROOT, else the directory holding fleet.toml, else CWD."""
+    """Consumer repo root: $FLEET_ROOT → git toplevel → walk-up to flake.nix → CWD."""
     if env := os.environ.get(ENV_ROOT):
         return Path(env).expanduser()
-    if (p := config_path()) is not None:
-        return p.parent
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return Path(out.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    for d in [Path.cwd(), *Path.cwd().parents]:
+        if (d / "flake.nix").is_file():
+            return d
     return Path.cwd()
+
+
+def _warn(msg: str) -> None:
+    click.echo(f"warning: {msg}", err=True)
+
+
+def _source_tree_hash(root: Path) -> str | None:
+    """Cheap staleness fingerprint: the git tree hash of nix/ at HEAD.
+
+    Dirty (uncommitted) nix/ edits do not bump it — the same accepted
+    blind spot hosts.json has always had; ops commands refresh both.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD:nix"],
+            cwd=root, capture_output=True, text=True, timeout=10,
+        )
+        return out.stdout.strip() if out.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _materialize_catalog(root: Path, dest: Path) -> bool:
+    """`nix build .#fleet-catalog` and copy the result to dest. True on success."""
+    try:
+        result = subprocess.run(
+            ["nix", "build", ".#fleet-catalog", "--no-link", "--print-out-paths"],
+            cwd=root, capture_output=True, text=True, timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _warn(f"could not build fleet-catalog: {exc}")
+        return False
+    if result.returncode != 0:
+        _warn(f"nix build .#fleet-catalog failed:\n{result.stderr.strip()}")
+        return False
+    store_path = Path(result.stdout.strip().splitlines()[-1])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".json.tmp")
+    tmp.write_text(store_path.read_text())
+    tmp.replace(dest)
+    if (src := _source_tree_hash(root)) is not None:
+        dest.with_suffix(".src").write_text(src + "\n")
+    return True
+
+
+@lru_cache(maxsize=1)
+def catalog_path() -> Path | None:
+    """Locate (and if needed materialize/refresh) the catalog JSON."""
+    if env := os.environ.get(ENV_CATALOG):
+        p = Path(env).expanduser()
+        if not p.is_file():
+            raise FleetConfigError(f"$FLEET_CATALOG points at {p}, which does not exist")
+        return p
+
+    root = repo_root()
+
+    # ADR-095 → ADR-097 migration: loud, no silent fallback.
+    if (root / "fleet.toml").is_file():
+        _warn("fleet.toml is ignored since ADR-097 — its values live in "
+              "fleet.settings (Nix) now; delete the file.")
+    if os.environ.get("FLEET_CONFIG"):
+        _warn("$FLEET_CONFIG is ignored since ADR-097 — use $FLEET_CATALOG "
+              "to point at a catalog JSON, or $FLEET_ROOT for the repo.")
+
+    dest = root / CATALOG_RELPATH
+    if not (root / "flake.nix").is_file():
+        return dest if dest.is_file() else None
+
+    refresh_allowed = not os.environ.get(ENV_NO_REFRESH)
+    if not dest.is_file():
+        if not refresh_allowed:
+            return None
+        click.echo("Materializing .cache/fleet/catalog.json (first run)…", err=True)
+        return dest if _materialize_catalog(root, dest) else None
+
+    # Refresh when the nix/ tree changed since generation.
+    src_file = dest.with_suffix(".src")
+    recorded = src_file.read_text().strip() if src_file.is_file() else None
+    current = _source_tree_hash(root)
+    if current is not None and recorded != current:
+        if refresh_allowed:
+            click.echo("fleet catalog stale (nix/ changed) — refreshing…", err=True)
+            _materialize_catalog(root, dest)  # failure warned; stale copy still used
+        else:
+            _warn("fleet catalog is stale (nix/ changed) and "
+                  f"${ENV_NO_REFRESH} forbids refreshing it")
+    return dest
 
 
 @lru_cache(maxsize=1)
 def _raw() -> dict[str, Any]:
-    p = config_path()
+    p = catalog_path()
     if p is None:
         return {}
     with open(p, "rb") as fh:
-        return tomllib.load(fh)
+        return json.load(fh)
 
 
 def get(dotted: str, default: Any = None) -> Any:
-    """Fetch `section.key` with a default (None ⇒ optional)."""
+    """Fetch `section.key` with a default (None ⇒ optional). Catalog nulls
+    (Nix `null` for an unset optional) fall through to the default too."""
     node: Any = _raw()
     for part in dotted.split("."):
         if not isinstance(node, dict) or part not in node:
             return default
         node = node[part]
-    return node
+    return default if node is None else node
 
 
 def require(dotted: str, hint: str = "") -> Any:
-    """Fetch `section.key` or die with a message telling the operator what to add."""
+    """Fetch `section.key` or die telling the operator what to declare."""
     val = get(dotted)
     if val is None:
-        where = config_path() or f"{CONFIG_FILENAME} (not found — create it at your repo root)"
+        where = catalog_path() or ".cache/fleet/catalog.json (not materialized — is `nix build .#fleet-catalog` green?)"
         raise FleetConfigError(
             f"missing `{dotted}` in {where}."
             + (f" {hint}" if hint else "")
-            + " See fleet_launcher/config.py for the full schema."
+            + " Declare it in fleet.settings (Nix) — see fleetkit nix/fleet/settings.nix."
         )
     return val
 
@@ -120,34 +190,34 @@ def require(dotted: str, hint: str = "") -> Any:
 # ── Typed accessors (the parameter surface, front and center) ────────
 
 def fleet_name() -> str:
-    return require("fleet.name", "Short org/fleet slug, e.g. name = \"acme\".")
+    return require("fleet.name", "Short org/fleet slug: fleet.settings.name.")
 
 def base_domain() -> str:
-    return require("domains.base", "Public zone, e.g. base = \"acme.dev\".")
+    return require("domains.base", "Public zone: fleet.settings.domain.base.")
 
 def internal_domain() -> str:
-    return require("domains.internal", "Fleet-internal zone, e.g. internal = \"acme.lan\".")
+    return require("domains.internal", "Fleet-internal zone: fleet.settings.domain.internal.")
 
 def tailnet_suffix() -> str:
-    return require("domains.tailnet_suffix", "MagicDNS base domain, e.g. \"hs.acme.dev\".")
+    return require("domains.tailnet_suffix", "MagicDNS base domain: fleet.settings.domain.tailnetSuffix.")
 
 def backend_bucket() -> str:
-    return require("backend.bucket", "Tofu S3 state bucket, e.g. bucket = \"acme-tofu\".")
+    return require("backend.bucket", "Tofu S3 state bucket: fleet.settings.backend.bucket.")
 
 def backend_region() -> str:
     return get("backend.region", "us-east-1")
 
 def age_key_file() -> str:
-    return os.path.expanduser(get("sops.age_key_file", "~/.ssh/sops-age.key"))
+    return os.path.expanduser(os.environ.get(ENV_AGE_KEY, "~/.ssh/sops-age.key"))
 
 def secrets_file() -> Path:
     return repo_root() / get("sops.secrets_file", "nix/secrets/secrets.yaml")
 
 def sysadmin_key_file() -> str:
-    return os.path.expanduser(get("ssh.sysadmin_key_file", "~/.ssh/sysadmin-key"))
+    return os.path.expanduser(os.environ.get(ENV_SYSADMIN_KEY, "~/.ssh/sysadmin-key"))
 
 def ops_email() -> str:
-    return get("fleet.ops_email", f"ops@{base_domain()}")
+    return get("fleet.ops_email") or f"ops@{base_domain()}"
 
 
 # ── Consumer CLI extensions ──────────────────────────────────────────

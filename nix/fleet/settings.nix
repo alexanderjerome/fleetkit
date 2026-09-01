@@ -17,11 +17,12 @@
 # minimum-viable fleet (one host, one provider, no optional services)
 # evaluates with only the settings that fleet actually exercises.
 #
-# Scope note: this is the NIX-side surface (modules, emitters,
-# images). The `fleet` CLI reads its operator-side settings from
-# `fleet.toml` at the consumer repo root — deliberately a separate,
-# eval-free file so the CLI starts fast. Values that both sides need
-# (domains, tailnet suffix) are declared in both; keep them in sync.
+# Scope note (ADR-097): this is the ONLY declaration surface — the
+# `fleet` CLI reads the same values from `.cache/fleet/catalog.json`,
+# a generated projection of this eval (the `fleet-catalog` package),
+# regenerated automatically. fleet.toml is gone; nothing is declared
+# twice. Operator-machine paths (age key, sysadmin key) are NOT
+# settings — they are conventions overridable via FLEET_* env vars.
 
 {
   options.fleet.settings = {
@@ -261,6 +262,66 @@
         example = "https://ca.example.lan:9000/acme/acme/directory";
         description = "ACME directory URL of the internal CA. null ⇒ modules default to public Let's Encrypt.";
       };
+    };
+
+    # ── CLI-facing settings (ADR-097) ────────────────────────────
+    # These existed only in fleet.toml before; the fleet-catalog
+    # projection now carries them to the launcher. Snake_case keys in
+    # freeform sets are deliberate — the catalog preserves them
+    # verbatim, and the CLI's dotted lookup paths predate this module.
+
+    opsEmail = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "ops@example.dev";
+      description = "Operations contact. null ⇒ the CLI derives ops@<domain.base>.";
+    };
+
+    backend = {
+      bucket = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "acme-tofu";
+        description = "Tofu S3 state bucket. Shared estate substrate (ADR-097) — fleet separation is the state KEY prefix, not the bucket. When set, mkFleet's `backend` argument may be omitted.";
+      };
+      region = lib.mkOption {
+        type = lib.types.str;
+        default = "us-east-1";
+        description = "AWS region of the state bucket.";
+      };
+    };
+
+    cli.extensionsDir = lib.mkOption {
+      type = lib.types.str;
+      default = "cli-ext";
+      description = "Repo-relative directory of consumer CLI extension modules (ADR-095 COMMANDS/ATTACH files).";
+    };
+
+    sopsSecretsFile = lib.mkOption {
+      type = lib.types.str;
+      default = "nix/secrets/secrets.yaml";
+      description = "Repo-relative path of the default sops file the CLI's secrets commands operate on.";
+    };
+
+    pki.acmeDnsApiBase = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "http://192.0.2.100:8081";
+      description = "acme-dns registration API on the fleet's DNS edge. Consumed by `fleet pki` (required, asserted there).";
+    };
+
+    pveInstall = lib.mkOption {
+      type = lib.types.attrsOf lib.types.raw;
+      default = { };
+      example = { serve_host = "192.0.2.91"; iso_sr_name = "NFS ISO Library"; };
+      description = "Unattended-PVE-install constants for `fleet pve install` (serve_host, iso_sr_uuid, iso_sr_name, main_sr_name, network_name, installer_iso, presets). Freeform: substrate constants whose long-term home is the typed provider nodes (ADR-096); keys pass to the catalog verbatim.";
+    };
+
+    mcp.grafanaTokenSopsPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "services/grafana/mcp_token";
+      description = "Sops key path of the read-only Grafana service-account token used by `fleet mcp config`.";
     };
 
     cache = {

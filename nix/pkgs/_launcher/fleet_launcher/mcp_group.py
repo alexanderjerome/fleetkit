@@ -39,7 +39,7 @@ console = Console()
 OWNED_KEYS = ("nixos", "grafana", "tempo")
 
 # SOPS path convention for the Grafana MCP service-account token
-# (Viewer-role). Override with [mcp] grafana_token_sops_path in fleet.toml.
+# (Viewer-role). Override with fleet.settings.mcp.grafanaTokenSopsPath.
 DEFAULT_GRAFANA_TOKEN_PATH = '["services"]["grafana"]["mcp_token"]'
 
 

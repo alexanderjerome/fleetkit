@@ -66,7 +66,7 @@ Run the check before AND after your change; never commit red.
   feature demands it).
 - CLI: click groups, one file per group in
   `nix/pkgs/_launcher/fleet_launcher/`, registered in `main.py`. Config
-  from `fleet.toml` via `config.py` accessors (eval-free — Nix-side data
+  from the generated catalog via `config.py` accessors (eval-free — Nix-side data
   reaches the CLI through built artifacts like `hostsJson` /
   `settings-json`, never `nix eval` at runtime). Runtime env (creds,
   ansible paths, caches) is provisioned by the CLI bootstrap, never by

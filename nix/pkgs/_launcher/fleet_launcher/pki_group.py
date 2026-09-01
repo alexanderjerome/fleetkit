@@ -10,9 +10,9 @@ this low-privilege credential (it can write only its own challenge record).
 
 Runtime prerequisites (this command talks to a LIVE acme-dns):
   - acme-dns running on the edge (infra.pki.acmeDns.enable) and its update API
-    reachable from where you run this (fleet.toml [pki].acme_dns_api_base,
+    reachable from where you run this (fleet.settings.pki.acmeDnsApiBase,
     e.g. "http://192.0.2.100:8081", or --api-base).
-  - SOPS age key available (fleet.toml [sops].age_key_file) to write the credential.
+  - SOPS age key available ($FLEET_AGE_KEY_FILE / ~/.ssh/sops-age.key) to write the credential.
 
 After registering, add the printed `<host> = "<fulldomain>";` line to
 `acmeDnsDelegations` in nix/fleet/dns/inputs.nix (emits the _acme-challenge
@@ -70,7 +70,7 @@ def acme_dns() -> None:
 @click.argument("host")
 @click.option("--api-base", default=None,
               help="acme-dns update API base URL (the edge acme-dns host). "
-                   "Defaults to [pki].acme_dns_api_base in fleet.toml.")
+                   "Defaults to fleet.settings.pki.acmeDnsApiBase.")
 @click.option("--restrict/--no-restrict", default=True,
               help="Restrict the credential to the host's internal IP (allowfrom). Default: restrict.")
 def register(host: str, api_base: str | None, restrict: bool) -> None:

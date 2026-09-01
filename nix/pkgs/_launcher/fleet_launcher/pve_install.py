@@ -42,7 +42,7 @@ console = Console()
 DEFAULT_SERVE_PORT = 8443
 
 
-# ── fleet.toml surface ([pve.install]) ───────────────────────────
+# ── catalog surface (pve.install.*, from fleet.settings.pveInstall) ──
 #
 # Site-specific values with no sane universal default. Example:
 #
@@ -264,7 +264,7 @@ def _pve_api_up(host: HostCfg, timeout: float = 5.0) -> bool:
 
 
 def _preset_hosts() -> dict[str, HostCfg]:
-    """PVE install presets from fleet.toml.
+    """PVE install presets from fleet.settings.pveInstall.
 
     Consumer data lives in the consumer repo:
 
@@ -318,7 +318,7 @@ def pve():
     Drives unattended PVE installs via partition-mode answer ISOs.
     Workstation hosts the .iso over short-lived HTTP; XOA pulls it
     into the ISO SR via disk.import url=. Host presets come from
-    fleet.toml ([pve.install.presets.<name>]).
+    fleet.settings.pveInstall.presets.<name>.
     """
 
 
@@ -342,7 +342,7 @@ def pve():
     "--serve-host",
     default=None,
     help="Address XOA should hit to pull the answer.iso. Defaults to "
-         "[pve.install].serve_host in fleet.toml. Override on remote "
+         "fleet.settings.pveInstall.serve_host. Override on remote "
          "workstations.",
 )
 @click.option(

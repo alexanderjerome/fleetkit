@@ -197,7 +197,7 @@ def secrets():
 
 @secrets.command("init")
 @click.option("--age-key-file", default=None,
-              help="Age key location (default: fleet.toml sops.age_key_file, "
+              help="Age key location (default: $FLEET_AGE_KEY_FILE, "
                    "falling back to ~/.ssh/sops-age.key).")
 @click.option("--from-ssh-key", default=None, type=click.Path(exists=True),
               help="Derive the age key from an existing ed25519 SSH private key "
@@ -213,7 +213,7 @@ def secrets_init(age_key_file: str | None, from_ssh_key: str | None):
       3. an encrypted nix/secrets/secrets.yaml stub
 
     The store path is fleetkit convention (nix/secrets/secrets.yaml,
-    overridable via fleet.toml [sops].secrets_file). Pass the same path
+    overridable via fleet.settings.sopsSecretsFile). Pass the same path
     to mkFleet's `secretsFile` argument so hosts decrypt it at
     activation. Existing files are left untouched.
     """

@@ -149,7 +149,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "192.0.2.0/24";
-      description = "Internal service network CIDR (vmbr1 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
+      description = "Internal service network CIDR (vmbr1 bridge). Informational — no framework module consumes it today; consumed by the CLI catalog (ADR-097).";
     };
 
     lan_gateway = lib.mkOption {
@@ -169,7 +169,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "198.51.100.0/24";
-      description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
+      description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; consumed by the CLI catalog (ADR-097).";
     };
 
     # Prefix lengths appended to the BARE `internal_ip` / `ip` of the

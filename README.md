@@ -16,7 +16,8 @@ any environment:
   data instead of literals.
 - **`fleet` CLI** (`nix/pkgs/_launcher/`): deploy (tf + colmena),
   secrets (SOPS), inventory, remote exec, sessions — configured by
-  `fleet.toml` at the consumer repo root, extended per-repo via
+  `fleet.settings` in the consumer's Nix config (projected to an
+  eval-free catalog for the CLI, ADR-097), extended per-repo via
   `cli-ext/`.
 - **Bootstrap images** (`nix/images/`): NixOS LXC template factory,
   XCP-ng installer ISO + disko template, prepared Debian cloud image.
@@ -35,7 +36,7 @@ fleetkit.lib.mkFleet {
 
 Start from the template: `nix flake init -t <fleetkit>#minimal`. The
 template documents every required parameter (`fleet/settings.nix` +
-`fleet.toml` — the Nix-side and CLI-side twins).
+the generated fleet catalog — one declaration, two consumers).
 
 Everything environment-specific is a parameter: state bucket, domains,
 tailnet suffix, WAN/LAN addressing, CA, binary caches, SOPS layout.

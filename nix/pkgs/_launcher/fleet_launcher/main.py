@@ -154,7 +154,7 @@ def _setup_env() -> None:
     """Load .env and populate the env vars our tools consume.
 
     Sets:
-      - AWS_* (credentials for the tofu S3 state backend; bucket from fleet.toml)
+      - AWS_* (credentials for the tofu S3 state backend; bucket from fleet.settings.backend)
       - PROXMOX_VE_* (terranix Proxmox provider credentials)
 
     All values come from SOPS (`nix/secrets/secrets.yaml`). Works both
@@ -334,7 +334,7 @@ def _maybe_reexec_for_missing_tools() -> None:
 def main() -> None:
     _maybe_reexec_for_missing_tools()
     _setup_env()
-    # Consumer command groups from the repo's cli-ext/ (fleet.toml [cli]).
+    # Consumer command groups from the repo's cli-ext/ (fleet.settings.cli.extensionsDir).
     from .config import load_extensions
     load_extensions(fleet)
     fleet()

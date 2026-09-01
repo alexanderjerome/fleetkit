@@ -62,7 +62,10 @@
     # contracts all keep working unchanged.
     mkFleet = {
       modules,
-      backend,
+      # Tofu state backend ({ bucket, region ? }). Optional since ADR-097:
+      # when omitted it comes from `fleet.settings.backend` — the flake
+      # stays bootstrap-only and the bucket is declared once, in Nix.
+      backend ? null,
       globalModules ? [],
       hostExtraModules ? {},
       colmenaOverlays ? [],
@@ -89,6 +92,15 @@
       fleetEval = (nixpkgs.lib.evalModules {
         modules = [ ./nix/fleet { _module.args.fleetLib = fleetLib; } ] ++ modules;
       }).config.fleet;
+
+      # ADR-097: backend argument > fleet.settings.backend, loudly none.
+      backend' =
+        if backend != null then backend
+        else if fleetEval.settings.backend.bucket != null then {
+          bucket = fleetEval.settings.backend.bucket;
+          region = fleetEval.settings.backend.region;
+        }
+        else throw "mkFleet: no tofu state backend — set fleet.settings.backend.bucket (or pass mkFleet { backend = ...; })";
 
       hosts =
         let
@@ -130,7 +142,8 @@
       mkTerranixStack = stackId: terranix.lib.terranixConfiguration {
         inherit system;
         modules = [ (import ./nix/tf {
-          inherit stackId backend fleetLib;
+          inherit stackId fleetLib;
+          backend = backend';
           fleetModules = modules;
         }) ];
       };
@@ -174,6 +187,37 @@
           # enumerate stacks without re-evaluating the fleet module.
           tf-stack-ids = pkgs.writeText "tf-stack-ids.json"
             (builtins.toJSON leafStackIds);
+
+          # The CLI catalog (ADR-097) — the generated, eval-free projection
+          # that REPLACED fleet.toml. Dotted key paths are preserved from
+          # the toml era verbatim, so fleet_launcher.config's get()/require()
+          # lookups and their call sites needed no changes. Materialized to
+          # .cache/fleet/catalog.json by the launcher (auto on first use;
+          # refreshed alongside hosts.json by `fleet inventory generate`).
+          # Operator-machine paths (age key, sysadmin key) are deliberately
+          # absent: those are conventions + FLEET_* env, not fleet facts.
+          fleet-catalog = pkgs.writeText "fleet-catalog.json" (builtins.toJSON {
+            _meta = { schema = 1; generator = "fleetkit mkFleet (ADR-097)"; };
+            fleet = {
+              name = fleetEval.settings.name;
+              ops_email = fleetEval.settings.opsEmail;
+            };
+            domains = {
+              base = fleetEval.settings.domain.base;
+              internal = fleetEval.settings.domain.internal;
+              tailnet_suffix = fleetEval.settings.domain.tailnetSuffix;
+            };
+            backend = backend';
+            network = {
+              internal_cidr = fleetEval.network.internal_cidr;
+              lan_cidr = fleetEval.settings.network.lanCidr;
+            };
+            sops.secrets_file = fleetEval.settings.sopsSecretsFile;
+            cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
+            pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
+            pve.install = fleetEval.settings.pveInstall;
+            mcp.grafana_token_sops_path = fleetEval.settings.mcp.grafanaTokenSopsPath;
+          });
 
           # fleet.settings as JSON — read by eval-free CLI features that
           # need Nix-side settings (e.g. `fleet mcp config` deriving the

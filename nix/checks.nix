@@ -35,7 +35,8 @@ let
 
   example = mkFleet {
     modules = [ ../templates/minimal/fleet ];
-    backend = { bucket = "example-tofu"; };
+    # No backend argument — deliberately: proves the ADR-097 fallback to
+    # fleet.settings.backend (the template declares the bucket there).
   };
 
   fleetPkg = pkgs.callPackage ./pkgs/_launcher { };
@@ -73,7 +74,11 @@ in {
       sopsKey = example.nixosConfigurations.example-v2.config
         .sops.secrets."example-v2/default/api_token".key;                    # "default/api_token"
     };
-    passAsFile = [ "v2Lift" ];
+    # The CLI catalog (ADR-097): force it as a strict env attr and assert
+    # the settings→catalog projection (bucket via the settings fallback,
+    # toml-era dotted keys present).
+    catalog = builtins.readFile "${example.packages.fleet-catalog}";
+    passAsFile = [ "v2Lift" "catalog" ];
   } ''
     test -s "$hostsJson"
     test -s "$stackIds"
@@ -83,6 +88,9 @@ in {
     grep -q '"node":"pve1"' "$v2LiftPath"
     grep -q '"sopsKey":"default/api_token"' "$v2LiftPath"
     grep -q '"secretHosts":\["example-v2"\]' "$v2LiftPath"
+    grep -q '"bucket":"REPLACE-ME-tofu"' "$catalogPath"
+    grep -q '"extensions_dir":"cli-ext"' "$catalogPath"
+    grep -q '"secrets_file":"nix/secrets/secrets.yaml"' "$catalogPath"
     touch $out
   '';
 
