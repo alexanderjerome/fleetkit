@@ -285,7 +285,11 @@
     };
 
   in
-  (flake-utils.lib.eachDefaultSystem (system:
+  # Linux-only on purpose (this is an LXC/VM fleet framework) — and
+  # eachDefaultSystem would force an x86_64-darwin nixpkgs import, which
+  # nixpkgs ≥26.11 turns into a hard eval throw for any consumer that
+  # points inputs.nixpkgs at current unstable.
+  (flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
     let
       pkgs = import nixpkgs { inherit system; };
     in {
