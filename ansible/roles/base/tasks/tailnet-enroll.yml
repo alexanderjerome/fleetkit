@@ -95,6 +95,9 @@
       register: tailscale_status
       changed_when: false
       failed_when: false
+      # Read-only probe — run it even under --check, or the parse below
+      # sees empty stdout and the whole dry run dies on from_json('').
+      check_mode: false
       when: tailnet_tun.stat.exists
 
     - name: parse tailscale state
@@ -103,7 +106,7 @@
           {{
             tailnet_tun.stat.exists
             and tailscale_status.rc | default(1) == 0
-            and (tailscale_status.stdout | from_json).BackendState | default('') == 'Running'
+            and ((tailscale_status.stdout | default('{}', true)) | from_json).BackendState | default('') == 'Running'
           }}
 
     - name: fetch preauth key from the key issuer
