@@ -210,7 +210,12 @@
             backend = backend';
             network = {
               internal_cidr = fleetEval.network.internal_cidr;
-              lan_cidr = fleetEval.settings.network.lanCidr;
+              # Historical naming mismatch, resolved here deliberately: the
+              # CLI's `lan_cidr` classifies the hypervisor/management net
+              # (inventory NIC bucketing) = settings.network.mgmtCidr.
+              # settings.network.lanCidr MIRRORS internal_cidr (postgres
+              # ACL convenience) and must NOT feed this key.
+              lan_cidr = fleetEval.settings.network.mgmtCidr;
             };
             sops.secrets_file = fleetEval.settings.sopsSecretsFile;
             cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
