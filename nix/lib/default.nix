@@ -84,7 +84,16 @@ in
           hostname = _hostname rt name;
           modules = [
             helpersModule
-            (if builtins.isFunction hostConfig then hostConfig else ({ ... }: hostConfig))
+            # A registry entry may be a module FUNCTION, a PATH/string to
+            # a module file (v2 `nixos = ./cfg/host.nix` facets), or a
+            # plain attrset. Paths must pass through untouched — wrapping
+            # one as ({...}: path) hands the module system a function
+            # returning a path, which it rejects far away from here.
+            (if builtins.isFunction hostConfig
+                || builtins.isPath hostConfig
+                || builtins.isString hostConfig
+             then hostConfig
+             else ({ ... }: hostConfig))
           ] ++ nixpkgs.lib.optional (internalIp != "") ({ ... }: {
             infra.networking.internalIp = internalIp;
           }) ++ nixpkgs.lib.optional ((internalIp != "") != (ip != "")) ({ ... }: {
