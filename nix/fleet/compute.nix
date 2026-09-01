@@ -582,6 +582,19 @@ let
         description = "Bridge the legacy `single-internal` mode attaches eth0 to. null = vmbr1, or vmbr0 when the provider instance is listed in fleet.settings.providers.proxmox.singleBridgeInstances. (Declared-mode hosts set the bridge per interface instead.)";
       };
 
+      fleet_ns = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "jeirslab";
+        description = "Fleet namespace this entry belongs to (ADR-097). null = the incumbent/default fleet (top-level provider tree; unprefixed stacks + legacy state keys). Set by the v2 normaliser when lifting from fleet.fleets.<name> — not authored by hand.";
+      };
+
+      scope = lib.mkOption {
+        type = lib.types.enum [ "fleet" "estate" ];
+        default = "fleet";
+        description = "ADR-097 derivation contract: an \"estate\"-scoped resource is a singleton serving every fleet on this substrate (router/DNS edge, builder, observability) and may fold ALL fleets' manifests into its config; \"fleet\"-scoped resources see only their own namespace. Enforcement lands with the second fleet — today this is declared intent + docs surface.";
+      };
+
       provides = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;

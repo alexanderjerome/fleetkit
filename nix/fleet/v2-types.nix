@@ -35,6 +35,12 @@ let
         description = "Secret declaration facet ({ file; instances.<name> = { secrets.…; envPrefix?; … }; }). Instances declared here are implicitly consumed by THIS machine; shared/host-less secrets belong in fleet.secrets instead.";
       };
 
+      scope = mkOption {
+        type = types.enum [ "fleet" "estate" ];
+        default = "fleet";
+        description = "ADR-097: \"estate\" marks a singleton serving every fleet on this substrate (may derive from all fleets' manifests); \"fleet\" (default) sees only its own namespace.";
+      };
+
       provides = mkOption {
         type = types.nullOr types.str;
         default = null;

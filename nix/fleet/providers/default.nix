@@ -163,7 +163,46 @@ let
       };
     };
   };
+  # ── Fleet namespaces (ADR-097) ─────────────────────────────────
+  # A named fleet is an additional provider forest over the SAME estate
+  # substrate: its resources lift into the flat layer like top-level
+  # ones, tagged fleet_ns = <name>, and its stacks enumerate as
+  # <name>.<env>.<stack> — which namespaces the tofu state key
+  # (tf/<name>-<env>-<stack>/) inside the shared bucket and gives the
+  # CLI's dot-path prefix matching per-fleet selection for free.
+  # The TOP-LEVEL fleet.providers tree is the incumbent/default fleet:
+  # unprefixed stacks, legacy state keys, no migration (ADR-097).
+  # Provider-instance CONFIG (endpoint, creds, nodes' mgmt_ip) belongs
+  # to the estate: declare it once at top level; a namespaced fleet's
+  # tree should carry only resources on those instances. Utility
+  # providers (random/ansible/…) are estate substrate too — top level
+  # only. Per-fleet state backend overrides (own bucket) are future
+  # work; see the ADR.
+  fleetNamespaceType = lib.types.submodule {
+    options = {
+      description = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "What / whose namespace this is (shown in docs projections).";
+      };
+      providers = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.attrsOf providerInstanceType);
+        default = {};
+        description = "Provider forest of this fleet: <family>.<instance>[.nodes.<node>].resources.<kind>.<name>, same shape as the top-level tree.";
+      };
+    };
+  };
+
 in {
+  options.fleet.fleets = lib.mkOption {
+    type = lib.types.attrsOf fleetNamespaceType;
+    default = {};
+    example = lib.literalExpression ''
+      { jeirslab.providers.proxmox.main.nodes.pve1.resources.lxc.foo = { vm_id = 9101; }; }
+    '';
+    description = "Named fleet namespaces sharing this estate's substrate (ADR-097).";
+  };
+
   options.fleet.providers = {
     proxmox = lib.mkOption {
       type = lib.types.attrsOf providerInstanceType;

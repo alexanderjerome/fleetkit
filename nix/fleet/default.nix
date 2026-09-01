@@ -39,9 +39,18 @@ let
   entriesByName = enabledCompute // cfg.resources;
 
   # ── Derived: fleet.stacks ───────────────────────────────────────
-  # Flat map { "${env}.${stack}" = [ entry ... ]; } — consumed by
-  # nix/tf/default.nix to emit one terranixConfiguration per leaf.
-  stacksById = groupBy (e: "${e.env}.${e.stack}") allEntries;
+  # Flat map { "[<fleet>.]${env}.${stack}" = [ entry ... ]; } — consumed
+  # by nix/tf/default.nix to emit one terranixConfiguration per leaf.
+  # Entries from a named fleet namespace (ADR-097) enumerate with their
+  # fleet_ns as stack-ID prefix, which flows into the slug and thus the
+  # tofu state key (tf/<fleet>-<env>-<stack>/) — per-fleet separation
+  # inside the shared bucket, with the incumbent's keys untouched. The
+  # CLI's dot-path prefix matching gives per-fleet stack selection with
+  # no new flags (`fleet deploy tf preview <fleet>`).
+  stackIdOf = e:
+    (lib.optionalString ((e.fleet_ns or null) != null) "${e.fleet_ns}.")
+    + "${e.env}.${e.stack}";
+  stacksById = groupBy stackIdOf allEntries;
 
   # ── Validator helpers ──────────────────────────────────────────
   # 1. Unique vm_id within (provider_instance, kind) — NOT global.

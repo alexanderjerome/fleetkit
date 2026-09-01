@@ -25,43 +25,66 @@ let
   inherit (lib) mapAttrsToList concatLists nameValuePair listToAttrs
                 filterAttrs optionalAttrs;
   v2 = import ./v2-types.nix { inherit lib; };
-  provs = config.fleet.providers;
 
   facetNames = [ "nixos" "secrets" "provides" "bootOrder" ];
 
+  # ── Provider forests (ADR-097) ──────────────────────────────────
+  # The top-level tree is the incumbent/default fleet (ns = null:
+  # unprefixed stacks, legacy state keys). Each fleet.fleets.<name>
+  # is a further forest over the same estate; its lifted entries carry
+  # fleet_ns = <name>, which namespaces their stack IDs.
+  forests = [ { ns = null; provs = config.fleet.providers; } ]
+    ++ mapAttrsToList (f: fcfg: { ns = f; provs = fcfg.providers; })
+       config.fleet.fleets;
+
   # Every provider family that carries instances (utility providers have no
   # resources option and are skipped by the ? check).
-  instances = concatLists (mapAttrsToList (pname: insts:
+  instancesOf = { ns, provs }: concatLists (mapAttrsToList (pname: insts:
     if builtins.isAttrs insts
-    then mapAttrsToList (iname: icfg: { inherit pname iname icfg; })
+    then mapAttrsToList (iname: icfg: { inherit ns pname iname icfg; })
          (filterAttrs (_: c: builtins.isAttrs c && (c ? resources || c ? nodes)) insts)
     else []) provs);
+  instances = concatLists (map instancesOf forests);
 
   stripFacets = m: removeAttrs m facetNames;
 
-  liftMachine = { pname, iname, node ? null }: kind: name: m:
+  liftMachine = { pname, iname, node ? null, ns ? null }: kind: name: m:
     nameValuePair name (stripFacets m // {
       kind = if kind == "lxc" then "container" else "vm";
       provider_instance = "${pname}.${iname}";
-    } // optionalAttrs (node != null) { inherit node; });
+    } // optionalAttrs (node != null) { inherit node; }
+      // optionalAttrs (ns != null) { fleet_ns = ns; });
 
-  machinePairs = concatLists (map ({ pname, iname, icfg }:
+  machinePairs = concatLists (map ({ ns, pname, iname, icfg }:
     let res = icfg.resources or {};
         nodeRes = concatLists (mapAttrsToList (node: ncfg:
           concatLists (mapAttrsToList (kind: ms:
-            mapAttrsToList (liftMachine { inherit pname iname node; } kind) ms)
+            mapAttrsToList (liftMachine { inherit pname iname node ns; } kind) ms)
             (filterAttrs (k: _: k == "lxc" || k == "vm") (ncfg.resources or {}))))
           (icfg.nodes or {}));
         instRes = concatLists (mapAttrsToList (kind: ms:
-          mapAttrsToList (liftMachine { inherit pname iname; } kind) ms)
+          mapAttrsToList (liftMachine { inherit pname iname ns; } kind) ms)
           (filterAttrs (k: _: k == "lxc" || k == "vm") res));
     in instRes ++ nodeRes) instances);
 
-  machinesByName = listToAttrs machinePairs;
+  # Cross-namespace name collisions are a HARD error, not a merge:
+  # names are estate-global (hostnames, DNS labels, colmena targets —
+  # everything estate-scoped services aggregate), and listToAttrs would
+  # otherwise drop the later declaration silently. Same-forest dupes
+  # are impossible (attrset keys); this catches the same name declared
+  # in two fleets, or a fleet shadowing the incumbent.
+  dupNames = let
+    names = map (p: p.name) machinePairs;
+    counted = lib.foldl' (acc: n: acc // { ${n} = (acc.${n} or 0) + 1; }) {} names;
+  in lib.attrNames (filterAttrs (_: c: c > 1) counted);
+
+  machinesByName =
+    if dupNames == [] then listToAttrs machinePairs
+    else throw "fleet v2: resource name(s) declared in more than one fleet namespace: ${toString dupNames} — names are estate-global (ADR-097)";
 
   # Collect the source machine attrsets (with facets intact) for the
   # hostsRegistry / secrets projections.
-  rawMachines = listToAttrs (concatLists (map ({ pname, iname, icfg }:
+  rawMachines = listToAttrs (concatLists (map ({ ns, pname, iname, icfg }:
     let all = (mapAttrsToList (kind: ms: ms)
                  (filterAttrs (k: _: k == "lxc" || k == "vm") (icfg.resources or {})))
            ++ concatLists (mapAttrsToList (_: ncfg:
@@ -70,7 +93,7 @@ let
                  (icfg.nodes or {}));
     in concatLists (map (ms: mapAttrsToList nameValuePair ms) all)) instances));
 
-  resourcePairs = concatLists (map ({ pname, iname, icfg }:
+  resourcePairs = concatLists (map ({ ns, pname, iname, icfg }:
     let km = v2.kindMap.${pname} or {};
         kinds = filterAttrs (k: _: k != "lxc" && k != "vm" && km ? ${k})
                   (icfg.resources or {});
@@ -78,7 +101,7 @@ let
          mapAttrsToList (name: e: nameValuePair name (e // {
            kind = km.${kind};
            provider_instance = "${pname}.${iname}";
-         })) entries) kinds)) instances);
+         } // optionalAttrs (ns != null) { fleet_ns = ns; })) entries) kinds)) instances);
 
   # ── Cross-style collisions: what IS and IS NOT caught ───────────
   # A machine declared in both styles with the same field set twice
