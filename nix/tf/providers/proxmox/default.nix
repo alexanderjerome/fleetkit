@@ -23,13 +23,20 @@ let
         insecure = cfg.insecure;
         ssh = { agent = true; username = "root"; };
       };
+      hasUserPass = cfg.secrets ? username;
     in base // (
       if hasApiToken
       then { api_token = sopsLib.sopsRef cfg.secrets.api_token; }
-      else {
+      else if hasUserPass
+      then {
         username = sopsLib.sopsRef cfg.secrets.username;
         password = sopsLib.sopsRef cfg.secrets.password;
       }
+      # No declared secrets ⇒ credentials come from the environment
+      # (PROXMOX_VE_ENDPOINT / PROXMOX_VE_API_TOKEN / ..._USERNAME/_PASSWORD
+      # — bpg reads them natively; the fleet launcher exports them from
+      # the consumer's sops integrations.proxmox when present).
+      else { }
     );
 in {
   # Only emit if there's at least one proxmox instance.
