@@ -1,10 +1,14 @@
-# Rendered by ansible: roles/proxmox/pbs/tasks/s3-config.yml.
-# Edit your inventory group vars, not here.
-#
-# NO `fingerprint` line — the internal CA root is in the system trust store
-# (managed by roles/base/tasks/ca-trust.yml). Re-pinning will break every
-# CA rotation.
+{# Rendered by ansible: roles/proxmox/pbs/tasks/s3-config.yml — edit inventory
+   group vars, not the file on the host.
 
+   NO `fingerprint` line — the internal CA root is in the system trust store
+   (managed by roles/base/tasks/ca-trust.yml). Re-pinning will break every
+   CA rotation.
+
+   NO '#' comment lines in the rendered output either: PBS section-config
+   rejects them with "syntax error (expected header)" and the whole file
+   stops parsing (seen live on datastore.cfg, INFRA-246). Jinja comments
+   only. #}
 s3-endpoint: {{ pbs_s3_endpoint_id }}
         endpoint {{ pbs_s3_endpoint }}
         region {{ pbs_s3_region }}
