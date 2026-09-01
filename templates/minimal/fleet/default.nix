@@ -12,5 +12,6 @@
     ./users.nix
     ./dns.nix
     ./hosts/example.nix
+    ./hosts/example-v2.nix   # same host shape, ADR-096 provider-tree style
   ];
 }

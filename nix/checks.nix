@@ -59,10 +59,30 @@ in {
     exampleToplevelDrv = builtins.unsafeDiscardOutputDependency
       example.nixosConfigurations.example.config.system.build.toplevel.drvPath;
     stackIds = example.packages.tf-stack-ids;
+    # v2 path forced end-to-end (ADR-096): the v2-authored host's closure,
+    # plus eval-time assertions on the lift. Four times on the consumer
+    # port a green check sat over broken code because nothing FORCED the
+    # value — these are all strict env attrs, so instantiating this
+    # derivation forces every one.
+    exampleV2ToplevelDrv = example.nixosConfigurations.example-v2.config.system.build.toplevel.drvPath;
+    v2Lift = builtins.toJSON {
+      kind = example.fleetEval.compute.example-v2.kind;                      # "container"
+      node = example.fleetEval.compute.example-v2.node;                      # "pve1"
+      pi   = example.fleetEval.compute.example-v2.provider_instance;         # "proxmox.main"
+      secretHosts = example.fleetEval.secrets.example-v2.consumers.hosts;    # [ "example-v2" ]
+      sopsKey = example.nixosConfigurations.example-v2.config
+        .sops.secrets."example-v2/default/api_token".key;                    # "default/api_token"
+    };
+    passAsFile = [ "v2Lift" ];
   } ''
     test -s "$hostsJson"
     test -s "$stackIds"
     echo "example toplevel: $exampleToplevelDrv"
+    echo "v2 toplevel:      $exampleV2ToplevelDrv"
+    grep -q '"kind":"container"' "$v2LiftPath"
+    grep -q '"node":"pve1"' "$v2LiftPath"
+    grep -q '"sopsKey":"default/api_token"' "$v2LiftPath"
+    grep -q '"secretHosts":\["example-v2"\]' "$v2LiftPath"
     touch $out
   '';
 
