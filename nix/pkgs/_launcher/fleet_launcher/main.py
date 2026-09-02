@@ -150,6 +150,21 @@ def _ensure_sops_age_key() -> None:
         os.environ["SOPS_AGE_KEY_FILE"] = key_file
 
 
+def _setenv_if_blank(name: str, value) -> None:
+    """Set an env var unless it already holds a NON-EMPTY value.
+
+    `os.environ.setdefault` is wrong here: a devshell that pre-exports
+    placeholders (PROXMOX_VE_ENDPOINT="" and friends) satisfies setdefault,
+    so the value decrypted from SOPS is silently discarded and the caller
+    later fails with "not set" about a variable that is, in fact, set — to
+    nothing. Precedence is unchanged: a real value already in the
+    environment still wins.
+    """
+    import os  # `os` is imported inside _setup_env, not at module scope
+    if not os.environ.get(name):
+        os.environ[name] = str(value)
+
+
 def _setup_env() -> None:
     """Load .env and populate the env vars our tools consume.
 
@@ -249,9 +264,9 @@ def _setup_env() -> None:
         if result.returncode == 0:
             import yaml
             aws = yaml.safe_load(result.stdout)
-            os.environ.setdefault("AWS_ACCESS_KEY_ID", aws["access_key_id"])
-            os.environ.setdefault("AWS_SECRET_ACCESS_KEY", aws["secret_access_key"])
-            os.environ.setdefault("AWS_DEFAULT_REGION", aws["region"])
+            _setenv_if_blank("AWS_ACCESS_KEY_ID", aws["access_key_id"])
+            _setenv_if_blank("AWS_SECRET_ACCESS_KEY", aws["secret_access_key"])
+            _setenv_if_blank("AWS_DEFAULT_REGION", aws["region"])
     except Exception:
         pass
 
@@ -273,8 +288,8 @@ def _setup_env() -> None:
             }
             for key, env_var in mapping.items():
                 if key in pve:
-                    os.environ.setdefault(env_var, str(pve[key]))
-        os.environ.setdefault("PROXMOX_VE_INSECURE", "true")
+                    _setenv_if_blank(env_var, pve[key])
+        _setenv_if_blank("PROXMOX_VE_INSECURE", "true")
     except Exception:
         pass
 
@@ -299,10 +314,10 @@ def _setup_env() -> None:
             else:
                 rest_url = ws_url
             rest_url = rest_url.rstrip("/")
-            os.environ.setdefault("XOA_URL", rest_url)
+            _setenv_if_blank("XOA_URL", rest_url)
             if "token" in xoa:
-                os.environ.setdefault("XOA_TOKEN", str(xoa["token"]))
-        os.environ.setdefault("XOA_INSECURE", "true")
+                _setenv_if_blank("XOA_TOKEN", xoa["token"])
+        _setenv_if_blank("XOA_INSECURE", "true")
     except Exception:
         pass
 
