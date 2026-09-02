@@ -114,7 +114,11 @@ def mcp_config(to_stdout: bool):
         url = grafana_domain if "://" in grafana_domain else f"http://{grafana_domain}"
         token_path = _cfg_get("mcp.grafana_token_sops_path",
                               DEFAULT_GRAFANA_TOKEN_PATH)
-        wrapper = _grafana_wrapper(root, url, token_path, str(_cfg_secrets()))
+        # services.* may live in its own file — ask for the tree, not a
+        # path. Hardcoding the default here regenerated INFRA-247 on
+        # every run, silently undoing the hand-fixed wrapper.
+        from .config import file_for as _file_for
+        wrapper = _grafana_wrapper(root, url, token_path, str(_file_for("services")))
         servers["grafana"] = {
             "type": "stdio",
             "command": str(wrapper),

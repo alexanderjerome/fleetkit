@@ -257,6 +257,7 @@
             # The file holding integrations.* — provider credentials. The CLI
             # reads the same tree terranix does, so both follow one setting.
             tf.sops_file = fleetEval.settings.tfSopsFile;
+            sops.files = fleetEval.settings.sopsFiles;
             cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
             pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
             pve.install = fleetEval.settings.pveInstall;

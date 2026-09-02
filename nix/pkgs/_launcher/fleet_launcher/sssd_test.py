@@ -63,7 +63,8 @@ def sssd_test(host: str):
     sops = _require_sops()
     _ensure_age_key()
     root = find_project_root()
-    secrets_file = str(root / "nix" / "secrets" / "secrets.yaml")
+    from .config import file_for as _file_for
+    secrets_file = str(_file_for("services"))
 
     result = subprocess.run(
         [sops, "-d", "--extract", SOPS_KEY_PATH, secrets_file],

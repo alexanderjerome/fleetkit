@@ -85,7 +85,10 @@ def register(host: str, api_base: str | None, restrict: bool) -> None:
                            "acme_dns_api_base = \"http://192.0.2.100:8081\" "
                            "(or pass --api-base).")
     _ensure_age_key()
-    secrets_file = _find_secrets_file()
+    # acme-dns credentials are integrations.* — write them where that
+    # tree actually lives, or they land in a file nothing reads.
+    from .config import file_for as _file_for
+    secrets_file = str(_file_for("integrations"))
 
     # Restrict the credential to the host's own IP where we can resolve it,
     # so a leaked credential can't be used from elsewhere to update the TXT.

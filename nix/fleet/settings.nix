@@ -327,6 +327,24 @@
       description = "Repo-relative directory of consumer CLI extension modules (ADR-095 COMMANDS/ATTACH files).";
     };
 
+    sopsFiles = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = lib.literalExpression ''{ integrations = "nix/secrets/integrations.yaml"; }'';
+      description = ''
+        Which SOPS file owns which TOP-LEVEL key tree, for fleets that split
+        their store by resource group. Keys are tree names ("integrations",
+        "services", "dbs", …); values are repo-relative paths. Anything not
+        listed falls back to `sopsSecretsFile`.
+
+        Splitting a store and leaving the original populated is the trap this
+        exists to close: a consumer aimed at the old file ERRORS when the key
+        is gone, but returns a diverged old value when a stale duplicate
+        survives — and that case never fails. Declaring routes once means a
+        consumer cannot hold a private, wrong opinion about where a tree lives.
+      '';
+    };
+
     tfSopsFile = lib.mkOption {
       type = lib.types.str;
       default = "nix/secrets/secrets.yaml";

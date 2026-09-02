@@ -213,6 +213,18 @@ def age_key_file() -> str:
 def secrets_file() -> Path:
     return repo_root() / get("sops.secrets_file", "nix/secrets/secrets.yaml")
 
+def file_for(tree: str) -> Path:
+    """SOPS file owning a top-level key tree (`fleet.settings.sopsFiles`).
+
+    Falls back to `secrets_file()` for any tree with no declared route, which
+    is the single-file case. Consumers should ask for the TREE they need
+    rather than naming a file: a hardcoded path is a private opinion about
+    layout that goes stale silently the next time the store is reorganised.
+    """
+    routed = (get("sops.files", {}) or {}).get(tree)
+    return (repo_root() / routed) if routed else secrets_file()
+
+
 def integrations_file() -> Path:
     """SOPS file holding the `integrations.*` tree — provider credentials.
 
@@ -224,7 +236,8 @@ def integrations_file() -> Path:
 
     Falls back to `secrets_file()` when unset, which is the single-file case.
     """
-    tf = get("tf.sops_file") or get("sops.tf_file")
+    routed = (get("sops.files", {}) or {}).get("integrations")
+    tf = routed or get("tf.sops_file") or get("sops.tf_file")
     return (repo_root() / tf) if tf else secrets_file()
 
 def sysadmin_key_file() -> str:
