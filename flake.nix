@@ -110,15 +110,23 @@
       }).config.fleet;
 
       # ADR-097: backend argument > fleet.settings.backend, loudly none.
+      # `perStack` rides along on both paths: nix/tf resolves it per stack,
+      # and dropping it here would silently ignore every override (the
+      # reconstruction below is explicit, so a new field must be added by
+      # hand — found the hard way).
+      backendPerStack = fleetEval.settings.backend.perStack or { };
       backend' =
-        if backend != null then backend
+        if backend != null then
+          { perStack = backendPerStack; } // backend
         else if fleetEval.settings.backend.type == "local" then {
           type = "local";
+          perStack = backendPerStack;
         }
         else if fleetEval.settings.backend.bucket != null then {
           type = "s3";
           bucket = fleetEval.settings.backend.bucket;
           region = fleetEval.settings.backend.region;
+          perStack = backendPerStack;
         }
         else throw "mkFleet: no tofu state backend — set fleet.settings.backend.bucket (or backend.type = \"local\", or pass mkFleet { backend = ...; })";
 

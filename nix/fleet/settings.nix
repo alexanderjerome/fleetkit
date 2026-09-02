@@ -294,6 +294,31 @@
         default = "us-east-1";
         description = "AWS region of the state bucket (type = s3).";
       };
+      perStack = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.attrsOf lib.types.raw);
+        default = { };
+        example = lib.literalExpression ''{ "platform-mcp" = { type = "local"; }; }'';
+        description = ''
+          Per-stack backend overrides, keyed by stack SLUG (the dot-path with
+          "." replaced by "-", e.g. "platform.core" -> "platform-core"). Each
+          value is merged over the fleet-wide backend, so an override may set
+          only what differs (usually just `type`).
+
+          The backend block is already emitted per stack, so this costs nothing
+          structurally. Two uses it exists for:
+
+            * Keep working when the shared bucket is unreachable — provision a
+              NEW stack on `type = "local"` while every existing stack stays
+              pointed at the remote it already lives in.
+            * Break a bootstrap cycle — a stack that provisions the fleet's own
+              object storage should not keep its state inside that storage.
+
+          DELIBERATE ACT, NOT A FALLBACK. Pointing an EXISTING stack at an empty
+          backend makes tofu read its entire inventory as "not created yet", and
+          an apply from there would recreate the fleet. Override a stack that has
+          no remote state yet, or migrate the state first and record that you did.
+        '';
+      };
     };
 
     cli.extensionsDir = lib.mkOption {

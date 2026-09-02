@@ -11,6 +11,20 @@
 
 let
   slug = builtins.replaceStrings [ "." ] [ "-" ] stackId;
+
+  # Per-stack backend override. The backend block is already emitted per
+  # stack (the S3 key is "tf/<slug>/…"), so letting one stack choose a
+  # different backend costs nothing structurally and buys a lot: a fleet
+  # whose shared bucket is unreachable can still provision NEW stacks on
+  # local state, and stacks that must not depend on in-fleet storage (the
+  # one holding the object store itself) can be pinned elsewhere.
+  #
+  # Only meaningful for a stack with no existing remote state, or one
+  # deliberately migrated: pointing an existing stack at an empty backend
+  # makes tofu read its whole inventory as "not created yet". Consumers
+  # are expected to treat an override as a deliberate, recorded act.
+  effBackend = (removeAttrs backend [ "perStack" ])
+    // (backend.perStack.${slug} or { });
 in
 { config, lib, ... }: {
   imports = [
@@ -41,13 +55,13 @@ in
     # "local" keeps terraform.tfstate in the stack's working dir
     # (.tf/<slug>/ — the tofu chdir), so no bucket or cloud creds are
     # needed; the state then lives only on the applying machine.
-    if (backend.type or "s3") == "local" then {
+    if (effBackend.type or "s3") == "local" then {
       backend.local = { path = "terraform.tfstate"; };
     } else {
       backend.s3 = {
-        bucket = backend.bucket;
+        bucket = effBackend.bucket;
         key = "tf/${slug}/terraform.tfstate";
-        region = backend.region or "us-east-1";
+        region = effBackend.region or "us-east-1";
         use_lockfile = true;
         encrypt = true;
       };
