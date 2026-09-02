@@ -327,6 +327,21 @@
       description = "Repo-relative directory of consumer CLI extension modules (ADR-095 COMMANDS/ATTACH files).";
     };
 
+    tfSopsFile = lib.mkOption {
+      type = lib.types.str;
+      default = "nix/secrets/secrets.yaml";
+      example = "nix/secrets/integrations.yaml";
+      description = ''
+        Repo-relative SOPS file the TERRANIX layer reads at `tofu apply` time
+        (the `data.sops_file.secrets` source). These are provider credentials —
+        `integrations.*` — which need not live in the same file NixOS hosts
+        default to. A fleet that splits its SOPS store per resource group must
+        point this at whichever file holds the integrations tree, or every
+        `tofu plan` fails with "The given key does not identify an element in
+        this collection value".
+      '';
+    };
+
     sopsSecretsFile = lib.mkOption {
       type = lib.types.str;
       default = "nix/secrets/secrets.yaml";
