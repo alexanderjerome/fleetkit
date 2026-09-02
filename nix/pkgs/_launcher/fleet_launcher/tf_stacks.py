@@ -738,3 +738,134 @@ def tf_state_export(scope: str, out_dir: str) -> None:
 
 
 __all__ = ["tf_stacks"]
+
+
+@tf_stacks.command("backend-check")
+@click.option("--stack", default=None,
+              help="Check the backend this stack resolves to (honours perStack overrides).")
+def tf_backend_check(stack: str | None) -> None:
+    """Diagnose the tofu state backend: creds, reachability, bucket access.
+
+    Answers the question `tofu init` refuses to: WHY did the backend fail.
+    tofu reports "No valid credential sources found" both when the secret was
+    never found and when it was found and rejected — two completely different
+    problems with the same message, and one of them is a one-line config fix.
+
+    Stages, each reported separately:
+      1. what backend this fleet (or one stack) resolves to
+      2. where credentials came from — which SOPS file, whether the key
+         existed there, and whether the environment already overrode it
+      3. whether AWS accepts them (STS)
+      4. whether the bucket exists and is readable
+    """
+    from . import config as _config
+    root = find_project_root()
+    backend = _config.get("backend", {}) or {}
+    ok = True
+
+    # ── 1. resolved backend ────────────────────────────────────────
+    btype = backend.get("type") or "s3"
+    per = backend.get("per_stack") or backend.get("perStack") or {}
+    if stack:
+        slug = stack.replace(".", "-")
+        override = per.get(slug) or {}
+        if override:
+            btype = override.get("type", btype)
+            console.print(f"[cyan]backend[/cyan]  {stack} overrides the fleet backend → {override}")
+    console.print(f"[cyan]backend[/cyan]  type={btype}"
+                  + (f" bucket={backend.get('bucket')} region={backend.get('region')}"
+                     if btype == "s3" else ""))
+    if btype == "local":
+        console.print("[green]OK[/green]       local state — no credentials, no bucket, "
+                      "nothing to check. State lives in .tf/<slug>/terraform.tfstate.")
+        return
+    if per:
+        console.print(f"[dim]         per-stack overrides declared for: "
+                      f"{', '.join(sorted(per))}[/dim]")
+
+    # ── 2. credential provenance ───────────────────────────────────
+    # Mirrors main.py's resolution exactly, including its precedence, so this
+    # reports what the launcher actually sees rather than an idealised view.
+    env_id = os.environ.get("AWS_ACCESS_KEY_ID")
+    if env_id:
+        console.print(f"[yellow]creds[/yellow]    AWS_ACCESS_KEY_ID already in the environment "
+                      f"({env_id[:4]}…{env_id[-3:]}) — the environment WINS over SOPS "
+                      f"(the launcher uses setdefault).")
+    from .config import secrets_file as _cfg_secrets
+    cfg_file = Path(str(_cfg_secrets()))
+    sops = shutil.which("sops")
+    if not sops:
+        console.print("[red]FAIL[/red]     `sops` not on PATH — run inside `nix develop`.")
+        sys.exit(1)
+
+    def _extract(path: Path):
+        r = subprocess.run([sops, "-d", "--extract", '["integrations"]["aws"]', str(path)],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return None, (r.stderr or "").strip().splitlines()[-1:] or [""]
+        import yaml
+        return yaml.safe_load(r.stdout), None
+
+    creds, err = (None, None)
+    if cfg_file.is_file():
+        creds, err = _extract(cfg_file)
+    if creds:
+        console.print(f"[green]creds[/green]    integrations.aws found in {cfg_file}")
+    else:
+        console.print(f"[red]FAIL[/red]     integrations.aws NOT in {cfg_file} "
+                      f"— the file the launcher reads (fleet.settings.sopsSecretsFile)")
+        ok = False
+        # A split SOPS store is the usual cause; say where it actually lives.
+        for sibling in sorted(cfg_file.parent.glob("*.yaml")):
+            if sibling == cfg_file:
+                continue
+            found, _ = _extract(sibling)
+            if found:
+                console.print(f"[yellow]  →[/yellow]      it IS in {sibling}. Either move the key, "
+                              f"or point fleet.settings.sopsSecretsFile there.")
+                creds = creds or found
+                break
+
+    if not creds:
+        console.print("[red]VERDICT[/red]  no credentials resolvable. Nothing to test against AWS.")
+        sys.exit(1)
+
+    # ── 3. does AWS accept them ────────────────────────────────────
+    env = {**os.environ,
+           "AWS_ACCESS_KEY_ID": creds["access_key_id"],
+           "AWS_SECRET_ACCESS_KEY": creds["secret_access_key"],
+           "AWS_DEFAULT_REGION": creds.get("region") or backend.get("region") or "us-east-1"}
+    aws = shutil.which("aws") or None
+    prefix = [aws] if aws else ["nix", "run", "--inputs-from", str(root), "nixpkgs#awscli2", "--"]
+
+    r = subprocess.run(prefix + ["sts", "get-caller-identity", "--output", "json"],
+                       capture_output=True, text=True, env=env, timeout=90)
+    if r.returncode == 0:
+        who = json.loads(r.stdout)
+        console.print(f"[green]sts[/green]      accepted — {who.get('Arn')}")
+    else:
+        msg = (r.stderr or r.stdout).strip().splitlines()[-1:] or [""]
+        console.print(f"[red]FAIL[/red]     STS rejected the credentials:\n         {msg[0]}")
+        if "InvalidClientTokenId" in r.stderr or "InvalidAccessKeyId" in r.stderr:
+            console.print("[dim]         The key ID is not known to AWS at all — deleted or "
+                          "rotated upstream, not a permissions problem. Ask whoever owns the "
+                          "account for a new one.[/dim]")
+        console.print("[red]VERDICT[/red]  credentials resolve but are not valid.")
+        sys.exit(1)
+
+    # ── 4. bucket ──────────────────────────────────────────────────
+    bucket = backend.get("bucket")
+    r = subprocess.run(prefix + ["s3api", "head-bucket", "--bucket", bucket],
+                       capture_output=True, text=True, env=env, timeout=90)
+    if r.returncode == 0:
+        console.print(f"[green]bucket[/green]   s3://{bucket} reachable and readable")
+    else:
+        last = (r.stderr or "").strip().splitlines()[-1:] or [""]
+        console.print(f"[red]FAIL[/red]     s3://{bucket}: {last[0]}")
+        console.print("[dim]         Credentials are valid, so this is the bucket or its "
+                      "policy — not the key.[/dim]")
+        ok = False
+
+    console.print("[green]VERDICT[/green]  backend healthy" if ok
+                  else "[red]VERDICT[/red]  backend NOT healthy — see above")
+    sys.exit(0 if ok else 1)
