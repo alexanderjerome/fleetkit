@@ -869,3 +869,280 @@ def tf_backend_check(stack: str | None) -> None:
     console.print("[green]VERDICT[/green]  backend healthy" if ok
                   else "[red]VERDICT[/red]  backend NOT healthy — see above")
     sys.exit(0 if ok else 1)
+
+
+# ── tf adopt: bring existing infrastructure under management ──────────
+#
+# CONFIG IS THE DRIVER. Resources are enumerated from the generated
+# config.tf.json, and for each declared resource we work out what its
+# real-world ID should be. Nothing undeclared can ever be pulled in — the
+# blast radius is bounded by the manifest. (The inverse question, "what
+# exists that I do NOT manage", is a separate verb by design; the two have
+# very different risk profiles.)
+#
+# Every ID here is derived from fields the config already carries, so the
+# derivation needs no network. It is then VERIFIED against the live
+# provider before anything touches state: vmids are unique per cluster, but
+# nothing guarantees the object at a vmid is the one this manifest means —
+# a stale entry, a hand-edited number, or a vmid reused after a destroy all
+# bind the wrong object. Deriving is cheap; being wrong is not.
+
+# type -> (id_fn(name, body) -> str | None, verifiable)
+# Only types whose import-ID FORMAT is certain live here. A guessed ID that
+# happens to parse is the worst outcome available: it binds an address to
+# some other real object, and the next apply "corrects" that object to match
+# the config. Unknown types are reported as manual, never guessed.
+_ADOPT_RESOLVERS: dict = {
+    "proxmox_virtual_environment_container":
+        (lambda n, b: f"{b['node_name']}/{b['vm_id']}" if b.get("vm_id") else None, True),
+    "proxmox_virtual_environment_vm":
+        (lambda n, b: f"{b['node_name']}/{b['vm_id']}" if b.get("vm_id") else None, True),
+    "proxmox_virtual_environment_pool":
+        (lambda n, b: b.get("pool_id"), False),
+    "proxmox_virtual_environment_group":
+        (lambda n, b: b.get("group_id"), False),
+}
+
+# No real-world counterpart: nothing to adopt, ever. Called out explicitly
+# because they are silently RE-CREATED on the next apply — and a resource
+# that generates a credential would rotate a live secret when it is.
+_UNIMPORTABLE = {"terraform_data", "random_password", "random_id",
+                 "random_string", "tls_private_key"}
+
+
+def _unwrap(block):
+    """terranix emits a resource body as either a dict or a 1-element list."""
+    return block[0] if isinstance(block, list) else block
+
+
+def _expected_hostname(name: str, body: dict) -> str:
+    init = _unwrap(body.get("initialization") or {}) or {}
+    return init.get("hostname") or name
+
+
+def _verify_pve(vmid: int, node: str, expect: str) -> tuple[bool, str]:
+    """Confirm the object at `vmid` is the one the config means."""
+    try:
+        from . import pve_api
+        api = pve_api.get_client()
+        cfg = pve_api.get_container_config(api, int(vmid), node=node)
+    except BaseException as e:
+        # BaseException, not Exception: pve_api exits the process when
+        # PROXMOX_VE_* is unset, and a missing credential must degrade this
+        # check rather than abort an otherwise useful dry run.
+        msg = f"{type(e).__name__}: {str(e)[:100]}".strip()
+        # "the object is not there" and "I could not look" are DIFFERENT
+        # answers. Reporting the second as the first would tell an operator a
+        # container is missing when the truth is that a credential is — and
+        # the fix for each is nothing like the fix for the other.
+        if any(s in str(e).lower() for s in ("does not exist", "not found", "no such")):
+            return "absent", msg
+        return "unverified", msg
+    actual = (cfg or {}).get("hostname") or ""
+    if not actual:
+        return "unverified", "live object has no hostname field"
+    if actual != expect:
+        return "mismatch", f"live hostname is {actual!r}, config says {expect!r}"
+    return "ok", actual
+
+
+def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
+    cfg = json.loads((wd / "config.tf.json").read_text())
+    rows: list[dict] = []
+    for rtype, entries in (cfg.get("resource") or {}).items():
+        for name, block in entries.items():
+            addr = f"{rtype}.{name}"
+            body = _unwrap(block) or {}
+            if rtype in _UNIMPORTABLE:
+                rows.append({"addr": addr, "id": "", "state": "unimportable",
+                             "note": "no real-world object — recreated on apply"})
+                continue
+            if addr in in_state:
+                rows.append({"addr": addr, "id": "", "state": "in-state",
+                             "note": "already managed"})
+                continue
+            resolver = _ADOPT_RESOLVERS.get(rtype)
+            if resolver is None:
+                rows.append({"addr": addr, "id": "", "state": "manual",
+                             "note": f"no resolver for {rtype} — import by hand"})
+                continue
+            id_fn, verifiable = resolver
+            try:
+                rid = id_fn(name, body)
+            except Exception as e:
+                rid = None
+                rows.append({"addr": addr, "id": "", "state": "manual",
+                             "note": f"could not derive id: {e}"})
+                continue
+            if not rid:
+                rows.append({"addr": addr, "id": "", "state": "manual",
+                             "note": "id fields absent from config"})
+                continue
+            if verify and verifiable and "/" in str(rid):
+                node, vmid = str(rid).split("/", 1)
+                verdict, detail = _verify_pve(vmid, node, _expected_hostname(name, body))
+                if verdict == "absent":
+                    # The normal path for a resource that has not been
+                    # provisioned yet — a plain apply will create it.
+                    rows.append({"addr": addr, "id": rid, "state": "not-found",
+                                 "note": "not provisioned yet — apply will create it"})
+                    continue
+                if verdict == "mismatch":
+                    rows.append({"addr": addr, "id": rid, "state": "mismatch",
+                                 "note": detail})
+                    continue
+                if verdict == "unverified":
+                    rows.append({"addr": addr, "id": rid, "state": "unverified",
+                                 "note": detail})
+                    continue
+            rows.append({"addr": addr, "id": rid, "state": "adopt",
+                         "note": "verified" if (verify and verifiable) else "derived"})
+    return sorted(rows, key=lambda r: r["addr"])
+
+
+@tf_stacks.command("adopt")
+@click.argument("scope")
+@click.option("--target", "targets", multiple=True,
+              help="Limit to these resource addresses (repeatable).")
+@click.option("--yes", is_flag=True, help="Actually adopt. Without this, dry-run only.")
+@click.option("--merge", is_flag=True,
+              help="Allow adopting into a stack that already holds state.")
+@click.option("--no-verify", is_flag=True,
+              help="Skip the live provider check. Faster, and strictly more dangerous.")
+def tf_adopt(scope: str, targets: tuple[str, ...], yes: bool,
+             merge: bool, no_verify: bool) -> None:
+    """Rebuild tofu state from live infrastructure for matched leaves.
+
+    Disaster recovery, and what makes a local backend survivable: if state can
+    be reconstructed from reality on demand, losing a state file stops being
+    an emergency.
+
+    Dry-run by default, and the dry-run deliberately does NOT need a working
+    state backend — the moment you most want to know what is adoptable is
+    when the backend is unreachable.
+
+    Adoption makes state match reality BY DEFINITION, so any pre-existing
+    drift silently becomes the new baseline. Read the dry-run table.
+    """
+    root = find_project_root()
+    overall = 0
+    for leaf in _resolve_scope(root, scope):
+        console.print(f"── adopt {leaf} ──", style="bold cyan")
+        wd = _stage_json(root, leaf)
+
+        # State is only consulted when we can reach it. A dry-run against an
+        # unreachable backend is still useful, so degrade rather than abort.
+        in_state: set[str] = set()
+        state_known = False
+        if yes or (wd / ".terraform").is_dir():
+            try:
+                _ensure_init(wd)
+                in_state = set(_state_addresses(wd))
+                state_known = True
+            except Exception:
+                if yes:
+                    console.print("[red]ERROR:[/red] cannot reach the state backend; "
+                                  "adoption needs to write state. Try "
+                                  "`fleet deploy tf backend-check`.")
+                    sys.exit(1)
+        if not state_known:
+            console.print("[dim]state backend not consulted — 'in-state' cannot be "
+                          "detected in this run[/dim]")
+
+        rows = _adopt_rows(wd, verify=not no_verify, in_state=in_state)
+        if targets:
+            rows = [r for r in rows if r["addr"] in targets]
+        if not rows:
+            console.print("  nothing to consider")
+            continue
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("resource"); table.add_column("import id")
+        table.add_column("status"); table.add_column("note")
+        colour = {"adopt": "green", "in-state": "dim", "not-found": "yellow",
+                  "mismatch": "red", "manual": "yellow", "unimportable": "red",
+                  "unverified": "yellow"}
+        for r in rows:
+            c = colour.get(r["state"], "")
+            table.add_row(r["addr"], r["id"], f"[{c}]{r['state']}[/{c}]" if c else r["state"],
+                          r["note"])
+        console.print(table)
+
+        adoptable = [r for r in rows if r["state"] == "adopt"]
+        mismatched = [r for r in rows if r["state"] == "mismatch"]
+        unverified = [r for r in rows if r["state"] == "unverified"]
+        if unverified:
+            console.print(f"[yellow]WARNING:[/yellow] {len(unverified)} resource(s) could not be "
+                          "checked against the live provider — that is not the same as absent. "
+                          "They are excluded from adoption; fix provider access, or accept the "
+                          "risk explicitly with --no-verify.")
+        if mismatched:
+            console.print(f"[red]REFUSING {leaf}:[/red] {len(mismatched)} resource(s) resolve to a "
+                          "live object that is NOT the one the config describes. Adopting these "
+                          "would bind the wrong object and the next apply would rewrite it. Fix "
+                          "the manifest (or pass --target to adopt only the good ones).")
+            overall = 1
+            continue
+        if not adoptable:
+            console.print("  nothing adoptable")
+            continue
+        if not yes:
+            console.print(f"[bold]dry run[/bold] — {len(adoptable)} resource(s) would be adopted. "
+                          f"Re-run with --yes to write state.")
+            continue
+        if in_state and not merge:
+            console.print(f"[red]REFUSING {leaf}:[/red] state already holds "
+                          f"{len(in_state)} resource(s). Adopting into a non-empty state can "
+                          "double-bind an address — pass --merge if that is what you mean.")
+            overall = 1
+            continue
+
+        # Import BLOCKS, not N× `tofu import`: batched, and the plan becomes
+        # the review artifact. Staged as a separate file so generated config
+        # is never polluted, and removed on the way out.
+        imports = [{"to": r["addr"], "id": r["id"]} for r in adoptable]
+        imp = wd / "zz-adopt-import.tf.json"
+        imp.write_text(json.dumps({"import": imports}, indent=2))
+        try:
+            backup = wd / "terraform.tfstate.pre-adopt"
+            src = wd / "terraform.tfstate"
+            if src.is_file():
+                shutil.copy2(src, backup)
+                console.print(f"[dim]state backed up → {backup}[/dim]")
+
+            # THE GATE. apply performs the imports AND anything else in the
+            # plan, so a wrong id does not fail loudly — it binds the wrong
+            # object and the same apply "corrects" it. Refuse unless the plan
+            # is imports and nothing else.
+            plan = wd / "adopt.tfplan"
+            r = subprocess.run(["tofu", "plan", "-input=false", "-out", str(plan)],
+                               cwd=wd, capture_output=True, text=True)
+            if r.returncode != 0:
+                console.print(f"[red]ERROR:[/red] plan failed:\n{(r.stderr or '')[-800:]}")
+                overall = 1
+                continue
+            show = subprocess.run(["tofu", "show", "-json", str(plan)],
+                                  cwd=wd, capture_output=True, text=True)
+            changes = [c for c in json.loads(show.stdout).get("resource_changes", [])
+                       if set(c.get("change", {}).get("actions", [])) - {"no-op"}]
+            if changes:
+                console.print(f"[red]REFUSING {leaf}:[/red] the plan contains "
+                              f"{len(changes)} resource change(s) beyond the imports:")
+                for c in changes[:10]:
+                    console.print(f"    {'/'.join(c['change']['actions'])}  {c['address']}")
+                console.print("  Adoption must be a pure state operation. A non-empty plan means "
+                              "an id is wrong or the config has drifted — resolve that first.")
+                overall = 1
+                continue
+            r = subprocess.run(["tofu", "apply", "-input=false", str(plan)],
+                               cwd=wd, capture_output=True, text=True)
+            if r.returncode != 0:
+                console.print(f"[red]ERROR:[/red] adopt failed:\n{(r.stderr or '')[-800:]}")
+                overall = 1
+                continue
+            console.print(f"[green]adopted[/green] {len(adoptable)} resource(s) into {leaf}")
+        finally:
+            imp.unlink(missing_ok=True)
+            (wd / "adopt.tfplan").unlink(missing_ok=True)
+
+    sys.exit(overall)

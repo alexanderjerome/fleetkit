@@ -213,6 +213,20 @@ def age_key_file() -> str:
 def secrets_file() -> Path:
     return repo_root() / get("sops.secrets_file", "nix/secrets/secrets.yaml")
 
+def integrations_file() -> Path:
+    """SOPS file holding the `integrations.*` tree — provider credentials.
+
+    A fleet that splits its SOPS store per resource group keeps provider
+    tokens (aws, proxmox, cloudflare, xen-orchestra) apart from the file
+    NixOS hosts default to. `fleet.settings.tfSopsFile` names that file for
+    the terranix layer; the CLI reads the SAME tree for the SAME credentials,
+    so it follows the same setting rather than keeping a second opinion.
+
+    Falls back to `secrets_file()` when unset, which is the single-file case.
+    """
+    tf = get("tf.sops_file") or get("sops.tf_file")
+    return (repo_root() / tf) if tf else secrets_file()
+
 def sysadmin_key_file() -> str:
     return os.path.expanduser(os.environ.get(ENV_SYSADMIN_KEY, "~/.ssh/sysadmin-key"))
 

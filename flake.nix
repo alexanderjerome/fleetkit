@@ -254,6 +254,9 @@
               lan_cidr = fleetEval.settings.network.mgmtCidr;
             };
             sops.secrets_file = fleetEval.settings.sopsSecretsFile;
+            # The file holding integrations.* — provider credentials. The CLI
+            # reads the same tree terranix does, so both follow one setting.
+            tf.sops_file = fleetEval.settings.tfSopsFile;
             cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
             pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
             pve.install = fleetEval.settings.pveInstall;

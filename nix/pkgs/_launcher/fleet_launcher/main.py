@@ -234,7 +234,11 @@ def _setup_env() -> None:
     if not sops:
         return
 
-    from .config import secrets_file as _cfg_secrets
+    # Provider credentials (integrations.*) may live in a different SOPS file
+    # from the NixOS default — see config.integrations_file(). Reading the
+    # wrong one fails SILENTLY below (`except: pass`), which is how a split
+    # store presented as "No valid credential sources found" for days.
+    from .config import integrations_file as _cfg_secrets
     secrets_file = str(_cfg_secrets())
 
     # AWS credentials for the tofu S3 state backend.
