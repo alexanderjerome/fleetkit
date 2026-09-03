@@ -1012,8 +1012,12 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
               help="Allow adopting into a stack that already holds state.")
 @click.option("--no-verify", is_flag=True,
               help="Skip the live provider check. Faster, and strictly more dangerous.")
+@click.option("--allow-updates", "allow_updates", is_flag=True,
+              help="Permit in-place updates in the post-import plan. Never permits "
+                   "create/destroy/replace. Needed for providers whose importer "
+                   "under-populates attributes (bpg: timeouts, vm_id).")
 def tf_adopt(scope: str, targets: tuple[str, ...], yes: bool,
-             merge: bool, no_verify: bool) -> None:
+             merge: bool, no_verify: bool, allow_updates: bool) -> None:
     """Rebuild tofu state from live infrastructure for matched leaves.
 
     Disaster recovery, and what makes a local backend survivable: if state can
@@ -1126,8 +1130,30 @@ def tf_adopt(scope: str, targets: tuple[str, ...], yes: bool,
                 continue
             show = subprocess.run(["tofu", "show", "-json", str(plan)],
                                   cwd=wd, capture_output=True, text=True)
-            changes = [c for c in json.loads(show.stdout).get("resource_changes", [])
-                       if set(c.get("change", {}).get("actions", [])) - {"no-op"}]
+            all_changes = [c for c in json.loads(show.stdout).get("resource_changes", [])
+                           if set(c.get("change", {}).get("actions", [])) - {"no-op"}]
+            # Separate by DANGER, not by "is there a diff at all".
+            #
+            # The gate exists to catch a WRONG ID — one that binds an address
+            # to some other real object, which the same apply then rewrites.
+            # That shows up as destroy, replace, or a resource this run failed
+            # to adopt and would now CREATE a duplicate of.
+            #
+            # A pure in-place update is different, and unavoidable here: the
+            # bpg importer does not populate client-side timeouts or vm_id, so
+            # EVERY Proxmox adoption plans an update that touches no API. A
+            # gate that refuses those can never pass, which makes it useless
+            # rather than strict — so they are allowed behind an explicit flag
+            # and always printed.
+            def _acts(c):
+                return set(c.get("change", {}).get("actions", [])) - {"no-op"}
+            unsafe = [c for c in all_changes if _acts(c) & {"delete", "create"}]
+            updates = [c for c in all_changes if _acts(c) == {"update"}]
+            changes = unsafe if allow_updates else all_changes
+            if updates and allow_updates:
+                console.print(f"[yellow]note:[/yellow] {len(updates)} in-place update(s) "
+                              "in the plan — expected for this provider (timeouts, vm_id). "
+                              "Review before the next apply.")
             if changes:
                 console.print(f"[red]REFUSING {leaf}:[/red] the plan contains "
                               f"{len(changes)} resource change(s) beyond the imports:")
