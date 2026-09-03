@@ -278,8 +278,18 @@ def _setup_env() -> None:
         from .config import get as _cfg_get
         pg_path = _cfg_get("backend_pg.conn_str_sops_path")
         if pg_path:
+            # The sops path names its own tree — ["dbs"]["tofu-db"]… — so
+            # route on that rather than assuming the integrations file. A
+            # connection string lives with the databases, not the provider
+            # credentials, and guessing here fails SILENTLY: the extract
+            # returns non-zero, the except swallows it, and tofu later reports
+            # a missing backend credential with no hint as to why.
+            import re as _re
+            from .config import file_for as _file_for
+            m_tree = _re.match(r'\["([^"]+)"\]', pg_path)
+            pg_file = str(_file_for(m_tree.group(1))) if m_tree else secrets_file
             result = subprocess.run(
-                [sops, "-d", "--extract", pg_path, secrets_file],
+                [sops, "-d", "--extract", pg_path, pg_file],
                 capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 _setenv_if_blank("PG_CONN_STR", result.stdout.strip())
