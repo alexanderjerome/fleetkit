@@ -109,6 +109,29 @@ in
       '';
     };
 
+    outboundProxy = mkOption {
+      type = types.nullOr types.port;
+      default = null;
+      example = 1055;
+      description = ''
+        Local port for tailscaled's outbound HTTP proxy
+        (`--outbound-http-proxy-listen`). Set this when a service on a
+        USERSPACE node needs to make outbound connections to tailnet peers.
+
+        In userspace mode tailscaled installs no kernel routes, so the host
+        cannot originate ordinary TCP to a tailnet IP at all — there is no
+        interface to send it out of. The node is reachable INBOUND (that is
+        what `serveUI` relies on) while every outbound connection fails, which
+        is a confusing asymmetry to debug: `tailscale ping` succeeds, because
+        it goes through the daemon rather than the kernel datapath, while
+        `curl http://<tailnet-ip>/` has nowhere to send the packet.
+
+        With this set, point the client at http://localhost:<port> and
+        outbound tailnet traffic works with no TUN device, no container
+        privilege changes, and no firewall edits.
+      '';
+    };
+
     userspace = mkOption {
       type = types.bool;
       default = false;
@@ -416,7 +439,10 @@ in
         enable = true;
         authKeyFile = lib.mkIf (cfg.authKeyFile != null) cfg.authKeyFile;
         extraUpFlags = enrollFlags;  # tags applied post-enrollment by postup
-        extraDaemonFlags = lib.mkIf cfg.userspace [ "--tun=userspace-networking" ];
+        extraDaemonFlags =
+          (lib.optional cfg.userspace "--tun=userspace-networking")
+          ++ (lib.optional (cfg.outboundProxy != null)
+               "--outbound-http-proxy-listen=localhost:${toString cfg.outboundProxy}");
         port = lib.mkDefault 41641;
         useRoutingFeatures = lib.mkDefault "client";
       };
