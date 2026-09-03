@@ -791,7 +791,10 @@ def tf_backend_check(stack: str | None) -> None:
         console.print(f"[yellow]creds[/yellow]    AWS_ACCESS_KEY_ID already in the environment "
                       f"({env_id[:4]}…{env_id[-3:]}) — the environment WINS over SOPS "
                       f"(the launcher uses setdefault).")
-    from .config import secrets_file as _cfg_secrets
+    # Ask for the TREE, not a file: once fleet.settings.sopsFiles routes
+    # `integrations`, reporting a FAIL because the *default* file lacks it is
+    # a false positive — and a diagnostic that cries wolf stops being read.
+    from .config import integrations_file as _cfg_secrets
     cfg_file = Path(str(_cfg_secrets()))
     sops = shutil.which("sops")
     if not sops:
@@ -813,7 +816,7 @@ def tf_backend_check(stack: str | None) -> None:
         console.print(f"[green]creds[/green]    integrations.aws found in {cfg_file}")
     else:
         console.print(f"[red]FAIL[/red]     integrations.aws NOT in {cfg_file} "
-                      f"— the file the launcher reads (fleet.settings.sopsSecretsFile)")
+                      f"— the file this fleet routes the integrations tree to")
         ok = False
         # A split SOPS store is the usual cause; say where it actually lives.
         for sibling in sorted(cfg_file.parent.glob("*.yaml")):
