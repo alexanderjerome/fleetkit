@@ -279,9 +279,9 @@
 
     backend = {
       type = lib.mkOption {
-        type = lib.types.enum [ "s3" "local" ];
+        type = lib.types.enum [ "s3" "local" "pg" ];
         default = "s3";
-        description = "Tofu state backend kind. \"local\" keeps terraform.tfstate inside each stack's working dir (.tf/<slug>/) — no bucket, no cloud creds; fine for a homelab, but the state only exists on the machine that ran the apply. \"s3\" (default) is the shared-bucket estate model (ADR-097).";
+        description = "Tofu state backend kind. \"local\" keeps terraform.tfstate inside each stack's working dir (.tf/<slug>/) — no bucket, no cloud creds; fine for a homelab, but the state only exists on the machine that ran the apply. \"s3\" (default) is the shared-bucket estate model (ADR-097). \"pg\" is Postgres, the on-prem option that provides REAL locking via advisory locks — S3-compatible stores that cannot do conditional writes (Garage, by design) leave `use_lockfile` silently ineffective, which is unsafe wherever more than one operator or agent applies.";
       };
       bucket = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -294,6 +294,34 @@
         default = "us-east-1";
         description = "AWS region of the state bucket (type = s3).";
       };
+      pg = {
+        schemaPrefix = lib.mkOption {
+          type = lib.types.str;
+          default = "tf_";
+          description = ''
+            Schema-name prefix for the `pg` backend. Each stack gets its own
+            schema (`<prefix><slug>`), which is how stacks stay isolated in one
+            database — the equivalent of the S3 key prefix.
+          '';
+        };
+        connStrSopsPath = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = ''["dbs"]["tofu-db"]["tofu"]["conn_str"]'';
+          description = ''
+            SOPS path to the libpq connection string, exported as PG_CONN_STR
+            at run time.
+
+            The connection string is DELIBERATELY not emitted into the backend
+            block: config.tf.json is built by Nix and therefore lands in
+            /nix/store, which is world-readable. A password baked in there is
+            readable by every user on every machine that builds the stack, and
+            no amount of file permissions afterwards takes it back. OpenTofu
+            reads PG_CONN_STR from the environment for exactly this reason.
+          '';
+        };
+      };
+
       perStack = lib.mkOption {
         type = lib.types.attrsOf (lib.types.attrsOf lib.types.raw);
         default = { };

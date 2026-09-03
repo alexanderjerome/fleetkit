@@ -270,6 +270,22 @@ def _setup_env() -> None:
     except Exception:
         pass
 
+    # Postgres state backend: OpenTofu reads PG_CONN_STR from the
+    # environment. Kept out of config.tf.json deliberately — that file is
+    # built by Nix into the world-readable store, so a password in the backend
+    # block would be exposed to every user on every machine that builds it.
+    try:
+        from .config import get as _cfg_get
+        pg_path = _cfg_get("backend_pg.conn_str_sops_path")
+        if pg_path:
+            result = subprocess.run(
+                [sops, "-d", "--extract", pg_path, secrets_file],
+                capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                _setenv_if_blank("PG_CONN_STR", result.stdout.strip())
+    except Exception:
+        pass
+
     # Proxmox provider credentials for terranix.
     try:
         result = subprocess.run(

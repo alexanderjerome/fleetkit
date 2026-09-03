@@ -57,6 +57,19 @@ in
     # needed; the state then lives only on the applying machine.
     if (effBackend.type or "s3") == "local" then {
       backend.local = { path = "terraform.tfstate"; };
+    } else if (effBackend.type or "s3") == "pg" then {
+      # No conn_str here, on purpose: this file is built by Nix into
+      # /nix/store, which is world-readable. OpenTofu reads PG_CONN_STR from
+      # the environment, so the credential never enters the store — the
+      # launcher exports it from SOPS the same way it does AWS_*.
+      #
+      # One schema per stack is the isolation boundary, mirroring the S3 key
+      # prefix. Postgres advisory locks then give real mutual exclusion, which
+      # is the whole reason to prefer this over an S3-compatible store that
+      # cannot do conditional writes.
+      backend.pg = {
+        schema_name = "${effBackend.pgSchemaPrefix or "tf_"}${slug}";
+      };
     } else {
       backend.s3 = {
         bucket = effBackend.bucket;

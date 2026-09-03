@@ -122,10 +122,16 @@
           type = "local";
           perStack = backendPerStack;
         }
+        else if fleetEval.settings.backend.type == "pg" then {
+          type = "pg";
+          pgSchemaPrefix = fleetEval.settings.backend.pg.schemaPrefix;
+          perStack = backendPerStack;
+        }
         else if fleetEval.settings.backend.bucket != null then {
           type = "s3";
           bucket = fleetEval.settings.backend.bucket;
           region = fleetEval.settings.backend.region;
+          pgSchemaPrefix = fleetEval.settings.backend.pg.schemaPrefix;
           perStack = backendPerStack;
         }
         else throw "mkFleet: no tofu state backend — set fleet.settings.backend.bucket (or backend.type = \"local\", or pass mkFleet { backend = ...; })";
@@ -258,6 +264,8 @@
             # reads the same tree terranix does, so both follow one setting.
             tf.sops_file = fleetEval.settings.tfSopsFile;
             sops.files = fleetEval.settings.sopsFiles;
+            # Where the launcher finds PG_CONN_STR for the pg backend.
+            backend_pg.conn_str_sops_path = fleetEval.settings.backend.pg.connStrSopsPath;
             cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
             pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
             pve.install = fleetEval.settings.pveInstall;
