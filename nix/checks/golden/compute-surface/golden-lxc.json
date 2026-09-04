@@ -944,6 +944,21 @@
         "pool_id": "golden",
         "provider": "proxmox.golden"
       }
+    },
+    "terraform_data": {
+      "lxc-devices-lxc-conf": {
+        "provisioner": [
+          {
+            "local-exec": {
+              "command": "nix shell nixpkgs#openssh --command ssh -o BatchMode=yes root@198.51.100.11 'bash -s' <<'FLEETKIT_EOF'\nset -e\nconf=/etc/pve/lxc/9110.conf\nb='# BEGIN fleetkit lxc_extra_conf'\ne='# END fleetkit lxc_extra_conf'\ntmp=$(mktemp)\nawk -v b=\"$b\" -v e=\"$e\" '$0==b{skip=1} !skip{print} $0==e{skip=0}' \"$conf\" > \"$tmp\"\n{ cat \"$tmp\"; echo \"$b\"; cat <<'FLEETKIT_BLOCK'\nlxc.cgroup2.devices.allow: c 188:* rwm\nlxc.mount.entry: /dev/serial/by-id dev/serial/by-id none bind,optional,create=dir\nFLEETKIT_BLOCK\necho \"$e\"; } > \"$conf\"\nrm -f \"$tmp\"\nif pct status 9110 | grep -q running; then pct reboot 9110; fi\nFLEETKIT_EOF"
+            }
+          }
+        ],
+        "triggers_replace": [
+          "${proxmox_virtual_environment_container.lxc-devices.id}",
+          "e5cd5b51af494a5944efd603f0b2bf591ee6dce78ea83fed5b83fceb3f5b2dba"
+        ]
+      }
     }
   },
   "terraform": {

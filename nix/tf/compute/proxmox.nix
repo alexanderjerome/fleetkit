@@ -17,6 +17,10 @@ let
   emitContainers = lib.mapAttrs helpers.mkContainer containers;
   emitVms        = lib.mapAttrs helpers.mkVm vms;
 
+  # Containers carrying raw lxc.conf lines get a terraform_data companion.
+  extraConf = lib.filterAttrs (_: c: (c.lxc_extra_conf or []) != []) containers;
+  emitExtraConf = lib.mapAttrs' (n: c: lib.nameValuePair "${n}-lxc-conf" (helpers.mkLxcExtraConf n c)) extraConf;
+
 in {
   config = lib.mkIf (stackId != null && computeInStack != {}) (
     lib.mkMerge [
@@ -25,6 +29,9 @@ in {
       })
       (lib.mkIf (vms != {}) {
         resource.proxmox_virtual_environment_vm = emitVms;
+      })
+      (lib.mkIf (extraConf != {}) {
+        resource.terraform_data = emitExtraConf;
       })
     ]
   );

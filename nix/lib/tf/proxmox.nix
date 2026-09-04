@@ -413,6 +413,46 @@ in rec {
             (initConfig.initialization or {});
           in lib.optionalAttrs hasCustomImage { initialization = merged; });
 
+  # ── Raw lxc.conf lines (escape hatch) ─────────────────────────
+  # terraform_data + local-exec over the same root-SSH channel the bpg
+  # provider itself uses (nix/tf/providers/proxmox: ssh.username = root).
+  # The block is rewritten idempotently between markers; the container is
+  # rebooted only if running. `nix shell`, never `nix-shell -p` (flakes-only
+  # operator hosts have no channels NIX_PATH).
+  mkLxcExtraConf = name: meta:
+    let
+      inst = builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1;
+      instCfg = config.fleet.providers.proxmox.${inst} or null;
+      node = resolveNode meta;
+      nodeAddr = if instCfg != null then (instCfg.cluster.node_addresses.${node} or node) else node;
+      block = lib.concatStringsSep "\n" meta.lxc_extra_conf;
+      vmid = toString meta.vm_id;
+      script = ''
+        set -e
+        conf=/etc/pve/lxc/${vmid}.conf
+        b='# BEGIN fleetkit lxc_extra_conf'
+        e='# END fleetkit lxc_extra_conf'
+        tmp=$(mktemp)
+        awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$conf" > "$tmp"
+        { cat "$tmp"; echo "$b"; cat <<'FLEETKIT_BLOCK'
+        ${block}
+        FLEETKIT_BLOCK
+        echo "$e"; } > "$conf"
+        rm -f "$tmp"
+        if pct status ${vmid} | grep -q running; then pct reboot ${vmid}; fi
+      '';
+    in {
+      triggers_replace = [
+        "\${proxmox_virtual_environment_container.${name}.id}"
+        (builtins.hashString "sha256" block)
+      ];
+      provisioner = [{
+        local-exec = {
+          command = "nix shell nixpkgs#openssh --command ssh -o BatchMode=yes root@${nodeAddr} 'bash -s' <<'FLEETKIT_EOF'\n${script}FLEETKIT_EOF";
+        };
+      }];
+    };
+
   # ── KVM/QEMU VM emitter ───────────────────────────────────────
   mkVm = name: meta:
     # cloud_init.enable = false: no cloud-init drive, no initialization

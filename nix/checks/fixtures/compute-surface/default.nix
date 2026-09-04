@@ -43,7 +43,7 @@ in
     endpoint = "https://198.51.100.2:8006";
     secrets.api_token = "integrations/proxmox/golden/api_token";
     state.prefix = "tf/proxmox-golden";
-    cluster = { nodes = [ "pve1" "pve2" ]; primary_node = "pve1"; };
+    cluster = { nodes = [ "pve1" "pve2" ]; primary_node = "pve1"; node_addresses.pve1 = "198.51.100.11"; };
   };
 
   config.fleet.resources = let r = extra: { env = "golden"; stack = "lxc"; provider_instance = pi; } // extra; in {
@@ -83,7 +83,8 @@ in
     lxc-devices = lxc { vm_id = 9110; internal_ip = "192.0.2.110"; arch = "arm64";
       features = { mknod = true; mount = [ "nfs" "cifs" ]; };
       devices = [ { path = "/dev/net/tun"; } { path = "/dev/dri/renderD128"; gid = 44; mode = "0660"; } { path = "/dev/apex_0"; deny_write = true; } ];
-      hook_script = "local:snippets/golden-hook.sh"; dns.domain = ""; };
+      hook_script = "local:snippets/golden-hook.sh"; dns.domain = "";
+      lxc_extra_conf = [ "lxc.cgroup2.devices.allow: c 188:* rwm" "lxc.mount.entry: /dev/serial/by-id dev/serial/by-id none bind,optional,create=dir" ]; };
 
     lxc-declared = lxc { vm_id = 9111; internal_ip = "192.0.2.111"; ip = "198.51.100.111"; network_mode = "declared";
       interfaces = [

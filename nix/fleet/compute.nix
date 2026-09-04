@@ -516,6 +516,25 @@ let
         '';
         description = "Host device nodes passed through into the container (bpg device_passthrough → PVE devN entries): TUN for VPN software, /dev/dri + /dev/kfd + /dev/nvidia* for GPU transcoding, /dev/apex_0 for a Coral TPU. Replaces the lxc.conf edits the community scripts made. LXC only.";
       };
+      lxc_extra_conf = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = lib.literalExpression ''
+          [ "lxc.cgroup2.devices.allow: c 188:* rwm"
+            "lxc.mount.entry: /dev/serial/by-id dev/serial/by-id none bind,optional,create=dir" ]
+        '';
+        description = ''
+          Raw lines appended to /etc/pve/lxc/<vmid>.conf inside a
+          "# BEGIN/END fleetkit lxc_extra_conf" marker block — the escape
+          hatch for what PVE's devN passthrough cannot express (hot-plug
+          USB cgroup wildcards, `optional` bind mounts, autodev hooks).
+          Applied by a terraform_data local-exec over root SSH to the
+          container's node (fleet.providers.proxmox.<inst>.cluster.node_addresses
+          maps node names to SSH hosts), re-run whenever the lines change,
+          rebooting the container if it is running. Emptying the list stops
+          managing the block but leaves it in place. LXC only.
+        '';
+      };
       hook_script = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;

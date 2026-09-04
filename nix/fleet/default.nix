@@ -157,10 +157,21 @@ let
   nameOf = e: builtins.head (attrNames (filterAttrs (_: v: v == e) entriesByName));
   lxcOnlyOnVm = filter
     (e: e.kind == "vm"
-        && ((e.devices or []) != [] || (e.hook_script or null) != null
+        && ((e.devices or []) != [] || (e.hook_script or null) != null || (e.lxc_extra_conf or []) != []
             || (e.arch or "amd64") != "amd64"
             || (e.features.mknod or false) || (e.features.mount or []) != []))
     (attrValues enabledCompute);
+
+  # 7b. lxc_extra_conf needs a node to SSH to (explicit or the instance's
+  #     primary_node).
+  extraConfViolations = lib.concatMap (e:
+    let
+      parts = lib.strings.splitString "." e.provider_instance;
+      inst = if length parts >= 2 then builtins.elemAt parts 1 else "";
+      primary = ((cfg.providers.proxmox or {}).${inst} or { cluster.primary_node = ""; }).cluster.primary_node;
+    in lib.optional ((e.lxc_extra_conf or []) != [] && (e.node or "") == "" && primary == "")
+         "${nameOf e}: lxc_extra_conf needs `node` (or cluster.primary_node on ${e.provider_instance}) to reach the PVE node over SSH")
+    (attrValues provisionedCompute);
 
   # 8. Device passthrough: unique host paths per guest; DNS override
   #    non-empty when given.
@@ -256,10 +267,10 @@ let
         FLEET LXC-only options set on VM entries (devices / hook_script / arch / features.mknod / features.mount):
           ${concatStringsSep ", " (map nameOf lxcOnlyOnVm)}
       '' (
-    throwIf ((deviceViolations ++ dnsViolations) != [])
+    throwIf ((deviceViolations ++ dnsViolations ++ extraConfViolations) != [])
       ''
         FLEET compute violations:
-          ${concatStringsSep "\n  " (deviceViolations ++ dnsViolations)}
+          ${concatStringsSep "\n  " (deviceViolations ++ dnsViolations ++ extraConfViolations)}
       '' (
     throwIf (prefixViolations != [])
       ''

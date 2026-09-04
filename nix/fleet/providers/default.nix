@@ -77,6 +77,12 @@ let
               example = "pve-alpha";
               description = "Fallback placement target: compute/resource entries that leave `node` empty are provisioned here.";
             };
+            node_addresses = lib.mkOption {
+              type = lib.types.attrsOf lib.types.str;
+              default = {};
+              example = { pve1 = "198.51.100.11"; pve2 = "pve2.mgmt.example.internal"; };
+              description = "Node name → SSH host used by out-of-band local-exec steps (fleet.compute.<name>.lxc_extra_conf). A node missing here is reached by its name.";
+            };
             ha_manager = lib.mkOption {
               type = lib.types.bool;
               default = false;
