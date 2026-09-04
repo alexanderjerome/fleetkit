@@ -16,6 +16,13 @@
 #   * docs            — the options documentation site builds with
 #                       warningsAreErrors: every option fleetkit declares
 #                       carries a description, forever.
+#   * compute-surface-golden — the Terraform JSON rendered for a fixture
+#                       fleet that hits every LXC/VM emitter path
+#                       (nix/checks/fixtures/compute-surface/) is
+#                       byte-identical to the committed goldens
+#                       (nix/checks/golden/compute-surface/). A schema or
+#                       emitter change must come with an intentional
+#                       golden update: nix/checks/update-golden.sh.
 
 { nixpkgs, mkFleet, sops-nix, disko }:
 
@@ -28,6 +35,14 @@ let
   };
 
   fleetPkg = pkgs.callPackage ./pkgs/_launcher { };
+
+  golden = mkFleet {
+    modules = [ ./checks/fixtures/compute-surface ];
+    backend = { bucket = "golden-tofu"; };
+  };
+  goldenRenders = pkgs.lib.mapAttrs' (n: v: pkgs.lib.nameValuePair (pkgs.lib.removePrefix "tf-" n) v)
+    (pkgs.lib.filterAttrs (n: _: pkgs.lib.hasPrefix "tf-" n && n != "tf-stack-ids") golden.packages);
+  goldenDir = ./checks/golden/compute-surface;
 
 in {
   # The toplevel drvPath goes through unsafeDiscardOutputDependency: a
@@ -75,4 +90,30 @@ in {
   # warningsAreErrors = true, so any fleetkit option without a
   # description fails this check.
   docs = import ../docs { inherit pkgs nixpkgs sops-nix disko; };
+
+  compute-surface-golden = (pkgs.runCommand "fleetkit-compute-surface-golden" {
+    nativeBuildInputs = [ pkgs.jq pkgs.diffutils ];
+    slugs = pkgs.lib.attrNames goldenRenders;
+    renderPaths = pkgs.lib.attrValues goldenRenders;
+    inherit goldenDir;
+    passthru = {
+      renders = goldenRenders;
+      slugs = pkgs.lib.concatStringsSep " " (pkgs.lib.attrNames goldenRenders);
+    };
+  } ''
+    set -- $renderPaths
+    fail=0
+    for slug in $slugs; do
+      render=$1; shift
+      golden="$goldenDir/$slug.json"
+      if [ ! -f "$golden" ]; then
+        echo "missing golden $slug.json — run nix/checks/update-golden.sh"; fail=1; continue
+      fi
+      if ! diff -u <(jq -S . "$golden") <(jq -S . "$render"); then
+        echo "render of stack $slug differs from golden — if intended, run nix/checks/update-golden.sh"; fail=1
+      fi
+    done
+    [ "$fail" = 0 ] || exit 1
+    touch $out
+  '');
 }

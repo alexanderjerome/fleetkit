@@ -1,0 +1,524 @@
+{
+  "data": {
+    "sops_file": {
+      "secrets": {
+        "source_file": "../../nix/secrets/secrets.yaml"
+      }
+    }
+  },
+  "provider": {
+    "proxmox": [
+      {
+        "alias": "golden",
+        "api_token": "${data.sops_file.secrets.data[\"integrations.proxmox.golden.api_token\"]}",
+        "endpoint": "https://198.51.100.2:8006",
+        "insecure": true,
+        "ssh": {
+          "agent": true,
+          "username": "root"
+        }
+      }
+    ]
+  },
+  "resource": {
+    "proxmox_virtual_environment_vm": {
+      "headscale-router": {
+        "agent": {
+          "enabled": true
+        },
+        "clone": {
+          "datastore_id": "local-storage",
+          "full": true,
+          "vm_id": 9000
+        },
+        "cpu": {
+          "cores": 2,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "interface": "virtio0",
+            "size": 16
+          }
+        ],
+        "initialization": {
+          "datastore_id": "local-storage",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "198.51.100.7/24",
+                "gateway": "198.51.100.1"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "192.0.2.202/24"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_account": {
+            "keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOLDENGOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN sysadmin@example.test"
+            ],
+            "username": "root"
+          }
+        },
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "headscale-router",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          },
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": true,
+        "tags": [],
+        "vm_id": 9202
+      },
+      "netgate": {
+        "agent": {
+          "enabled": true
+        },
+        "clone": {
+          "datastore_id": "local-storage",
+          "full": true,
+          "vm_id": 9000
+        },
+        "cpu": {
+          "cores": 2,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "interface": "virtio0",
+            "size": 16
+          }
+        ],
+        "initialization": {
+          "datastore_id": "local-storage",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "198.51.100.201/24",
+                "gateway": "198.51.100.1"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "192.0.2.201/24"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_account": {
+            "keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOLDENGOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN sysadmin@example.test"
+            ],
+            "username": "root"
+          }
+        },
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "netgate",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "BC:24:11:5B:EA:26",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          },
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "BC:24:11:D0:E9:C0",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": true,
+        "tags": [
+          "golden"
+        ],
+        "vm_id": 9201
+      },
+      "vm-clone": {
+        "agent": {
+          "enabled": true
+        },
+        "clone": {
+          "datastore_id": "local-storage",
+          "full": true,
+          "vm_id": 9000
+        },
+        "cpu": {
+          "cores": 2,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "interface": "virtio0",
+            "size": 16
+          },
+          {
+            "datastore_id": "local-storage",
+            "interface": "virtio1",
+            "size": 100
+          }
+        ],
+        "initialization": {
+          "datastore_id": "local-storage",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "dhcp"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "192.0.2.204/24"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_account": {
+            "keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOLDENGOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN sysadmin@example.test"
+            ],
+            "username": "root"
+          }
+        },
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "vm-clone",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          },
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": true,
+        "tags": [],
+        "vm_id": 9204
+      },
+      "vm-file": {
+        "agent": {
+          "enabled": true
+        },
+        "cpu": {
+          "cores": 2,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "file_id": "local:iso/example-cloud-amd64.qcow2",
+            "interface": "virtio0",
+            "size": 16
+          }
+        ],
+        "initialization": {
+          "datastore_id": "local-storage",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "dhcp"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "192.0.2.205/24"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_data_file_id": "local:snippets/vm-file-user-data.yaml"
+        },
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "vm-file",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          },
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": true,
+        "tags": [],
+        "vm_id": 9205
+      },
+      "vm-nixos-template": {
+        "agent": {
+          "enabled": true
+        },
+        "clone": {
+          "datastore_id": "local-storage",
+          "full": true,
+          "vm_id": 9000
+        },
+        "cpu": {
+          "cores": 4,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "interface": "virtio0",
+            "size": 32
+          }
+        ],
+        "initialization": {
+          "datastore_id": "local-storage",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "dhcp"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "192.0.2.203/24"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_account": {
+            "keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOLDENGOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN sysadmin@example.test"
+            ],
+            "username": "root"
+          }
+        },
+        "memory": {
+          "dedicated": 4096
+        },
+        "name": "vm-nixos-template",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          },
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": true,
+        "tags": [],
+        "vm_id": 9203
+      }
+    }
+  },
+  "terraform": {
+    "backend": {
+      "s3": {
+        "bucket": "golden-tofu",
+        "encrypt": true,
+        "key": "tf/golden-vm/terraform.tfstate",
+        "region": "us-east-1",
+        "use_lockfile": true
+      }
+    },
+    "required_providers": {
+      "proxmox": {
+        "source": "bpg/proxmox",
+        "version": "~> 0.103"
+      },
+      "sops": {
+        "source": "carlpett/sops",
+        "version": "~> 1.1"
+      }
+    },
+    "required_version": ">= 1.10"
+  }
+}
