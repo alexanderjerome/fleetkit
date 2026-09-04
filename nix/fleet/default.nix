@@ -153,8 +153,37 @@ let
                      && prefixOf cfg.network.lan_cidr != cfg.network.lan_prefix_len)
       "fleet.network.lan_prefix_len=${toString cfg.network.lan_prefix_len} disagrees with lan_cidr=${cfg.network.lan_cidr}";
 
+  # 7. LXC-only knobs on a VM are a mistake, not a no-op.
+  nameOf = e: builtins.head (attrNames (filterAttrs (_: v: v == e) entriesByName));
+  lxcOnlyOnVm = filter
+    (e: e.kind == "vm"
+        && ((e.devices or []) != [] || (e.hook_script or null) != null
+            || (e.arch or "amd64") != "amd64"
+            || (e.features.mknod or false) || (e.features.mount or []) != []))
+    (attrValues enabledCompute);
+
+  # 8. Device passthrough: unique host paths per guest; DNS override
+  #    non-empty when given.
+  deviceViolations = lib.concatMap
+    (e: let paths = map (d: d.path) (e.devices or []);
+        in lib.optional (lib.unique paths != paths) "${nameOf e}: duplicate device paths")
+    (attrValues enabledCompute);
+  dnsViolations = lib.concatMap
+    (e: lib.optional ((e.dns.servers or null) == []) "${nameOf e}: dns.servers = [] (use null to inherit fleet.network.dns_servers)")
+    (attrValues enabledCompute);
+
   # ── Throw chain ────────────────────────────────────────────────
   validated =
+    throwIf (lxcOnlyOnVm != [])
+      ''
+        FLEET LXC-only options set on VM entries (devices / hook_script / arch / features.mknod / features.mount):
+          ${concatStringsSep ", " (map nameOf lxcOnlyOnVm)}
+      '' (
+    throwIf ((deviceViolations ++ dnsViolations) != [])
+      ''
+        FLEET compute violations:
+          ${concatStringsSep "\n  " (deviceViolations ++ dnsViolations)}
+      '' (
     throwIf (prefixViolations != [])
       ''
         FLEET network prefix-length violations:
@@ -209,7 +238,7 @@ let
             ) instances)
           ) cfg.providers)}
       ''
-    true)))));
+    true)))))));
 
 in {
   imports = [

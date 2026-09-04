@@ -402,6 +402,106 @@
         "tags": [],
         "vm_id": 9205
       },
+      "vm-lifecycle": {
+        "agent": {
+          "enabled": true
+        },
+        "clone": {
+          "datastore_id": "local-storage",
+          "full": true,
+          "vm_id": 9000
+        },
+        "cpu": {
+          "cores": 2,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "interface": "virtio0",
+            "size": 16
+          }
+        ],
+        "initialization": {
+          "datastore_id": "local-storage",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.54"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "dhcp"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "192.0.2.206/24"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_account": {
+            "keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOLDENGOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN sysadmin@example.test"
+            ],
+            "username": "root"
+          }
+        },
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "vm-lifecycle",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          },
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "on_boot": false,
+        "operating_system": {
+          "type": "l26"
+        },
+        "protection": true,
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": false,
+        "startup": {
+          "down_delay": 60,
+          "order": 1
+        },
+        "tags": [],
+        "vm_id": 9206
+      },
       "vm-nixos-template": {
         "agent": {
           "enabled": true

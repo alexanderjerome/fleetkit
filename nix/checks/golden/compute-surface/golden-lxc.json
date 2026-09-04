@@ -225,6 +225,90 @@
         "unprivileged": true,
         "vm_id": 9108
       },
+      "lxc-devices": {
+        "console": {
+          "type": "console"
+        },
+        "cpu": {
+          "architecture": "arm64",
+          "cores": 2
+        },
+        "device_passthrough": [
+          {
+            "path": "/dev/net/tun"
+          },
+          {
+            "gid": 44,
+            "mode": "0660",
+            "path": "/dev/dri/renderD128"
+          },
+          {
+            "deny_write": true,
+            "path": "/dev/apex_0"
+          }
+        ],
+        "disk": {
+          "datastore_id": "local-lvm",
+          "size": 16
+        },
+        "features": {
+          "fuse": true,
+          "keyctl": true,
+          "mknod": true,
+          "mount": [
+            "nfs",
+            "cifs"
+          ],
+          "nesting": true
+        },
+        "hook_script_file_id": "local:snippets/golden-hook.sh",
+        "initialization": {
+          "dns": {
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "hostname": "lxc-devices",
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "192.0.2.110/24",
+                "gateway": "192.0.2.1"
+              }
+            }
+          ]
+        },
+        "lifecycle": [
+          {
+            "ignore_changes": [
+              "operating_system"
+            ]
+          }
+        ],
+        "memory": {
+          "dedicated": 2048,
+          "swap": 2048
+        },
+        "mount_point": [],
+        "network_interface": [
+          {
+            "bridge": "vmbr1",
+            "name": "eth0"
+          }
+        ],
+        "node_name": "pve1",
+        "operating_system": {
+          "template_file_id": "nix-store:vztmpl/nixos-lxc-template-x86_64.tar.xz",
+          "type": "nixos"
+        },
+        "provider": "proxmox.golden",
+        "start_on_boot": true,
+        "started": true,
+        "tags": [],
+        "unprivileged": true,
+        "vm_id": 9110
+      },
       "lxc-dual": {
         "console": {
           "type": "console"
@@ -430,6 +514,74 @@
         ],
         "unprivileged": true,
         "vm_id": 9101
+      },
+      "lxc-lifecycle": {
+        "console": {
+          "type": "console"
+        },
+        "cpu": {
+          "cores": 2
+        },
+        "disk": {
+          "datastore_id": "local-lvm",
+          "size": 16
+        },
+        "features": {
+          "fuse": true,
+          "keyctl": true,
+          "nesting": true
+        },
+        "initialization": {
+          "dns": {
+            "domain": "lab.golden.test",
+            "servers": [
+              "192.0.2.54"
+            ]
+          },
+          "hostname": "lxc-lifecycle",
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "192.0.2.109/24",
+                "gateway": "192.0.2.1"
+              }
+            }
+          ]
+        },
+        "lifecycle": [
+          {
+            "ignore_changes": [
+              "operating_system"
+            ]
+          }
+        ],
+        "memory": {
+          "dedicated": 2048,
+          "swap": 2048
+        },
+        "mount_point": [],
+        "network_interface": [
+          {
+            "bridge": "vmbr1",
+            "name": "eth0"
+          }
+        ],
+        "node_name": "pve1",
+        "operating_system": {
+          "template_file_id": "nix-store:vztmpl/nixos-lxc-template-x86_64.tar.xz",
+          "type": "nixos"
+        },
+        "protection": true,
+        "provider": "proxmox.golden",
+        "start_on_boot": false,
+        "started": false,
+        "startup": {
+          "order": 5,
+          "up_delay": 20
+        },
+        "tags": [],
+        "unprivileged": true,
+        "vm_id": 9109
       },
       "lxc-netgate": {
         "console": {

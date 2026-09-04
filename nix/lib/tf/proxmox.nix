@@ -58,12 +58,32 @@ let
   # fresh LXCs and VMs boot resolvable even when the fleet's own DNS
   # isn't up yet. mkVm has its own initialization block and adds
   # DNS there directly; LXCs (mkContainer) rely entirely on mkNetwork.
+  # Create-time DNS block: per-guest override (meta.dns) falling back to
+  # the cluster-wide fleet.network values. dns_domain is optional (null ⇒
+  # no internal zone): omit the attr so the provider writes no search
+  # domain into the guest; "" on the per-guest override means the same.
+  dnsFor = meta:
+    let
+      d = meta.dns or { servers = null; domain = null; };
+      servers = if d.servers != null then d.servers else net.dns_servers;
+      domain = if d.domain != null then d.domain else net.dns_domain;
+    in { inherit servers; }
+       // lib.optionalAttrs (domain != null && domain != "") { inherit domain; };
+
+  # Lifecycle attributes shared by containers and VMs; each emitted only
+  # when it differs from what the emitter produced before the option
+  # existed (protection off, startup unmanaged).
+  lifecycleAttrs = meta:
+    lib.optionalAttrs (meta.protection or false) { protection = true; }
+    // lib.optionalAttrs ((meta.startup or null) != null) {
+      startup = lib.filterAttrs (_: v: v != null) {
+        inherit (meta.startup) order up_delay down_delay;
+      };
+    };
+
   mkNetwork = meta: let
     mode = meta.network_mode;
-    # dns_domain is optional (null ⇒ no internal zone): omit the attr so
-    # the provider writes no search domain into the guest.
-    dnsConfig = { servers = net.dns_servers; }
-      // lib.optionalAttrs (net.dns_domain != null) { domain = net.dns_domain; };
+    dnsConfig = dnsFor meta;
     # Per-host override for bpg-provider's `host_managed` attribute. Splice
     # into every network_interface entry when set. null = leave bpg default.
     hmAttrs = if (meta ? host_managed && meta.host_managed != null)
@@ -315,23 +335,38 @@ in rec {
       provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
       node_name = resolveNode meta;
       vm_id = meta.vm_id;
-      started = true;
-      start_on_boot = true;
+      started = meta.start_on_create;
+      start_on_boot = meta.onboot;
       unprivileged = !meta.privileged;
       tags = meta.tags;
 
-      cpu = { cores = meta.cpu_cores; };
+      cpu = { cores = meta.cpu_cores; }
+        // lib.optionalAttrs (meta.arch != "amd64") { architecture = meta.arch; };
       memory = { dedicated = meta.memory_mb; swap = meta.swap_mb; };
       disk = { datastore_id = meta.root_disk_datastore; size = meta.root_disk_gb; };
-      # Only emit fuse/keyctl when true: a non-root PVE API token may set
-      # `nesting` but 403s on ANY fuse/keyctl value (even false), so omitting
-      # them when off lets the IaC path create token-managed CTs (INFRA-88).
+      # Only emit fuse/keyctl/mknod/mount when on: a non-root PVE API token
+      # may set `nesting` but 403s on ANY fuse/keyctl value (even false), so
+      # omitting them when off lets the IaC path create token-managed CTs
+      # (INFRA-88).
       features = {
         nesting = meta.features.nesting;
       } // (lib.optionalAttrs meta.features.fuse { fuse = true; })
-        // (lib.optionalAttrs meta.features.keyctl { keyctl = true; });
+        // (lib.optionalAttrs meta.features.keyctl { keyctl = true; })
+        // (lib.optionalAttrs meta.features.mknod { mknod = true; })
+        // (lib.optionalAttrs (meta.features.mount != []) { mount = meta.features.mount; });
       console = { type = "console"; };
     } // mountConfig // sourceConfig
+      // (lifecycleAttrs meta)
+      // (lib.optionalAttrs (meta.devices != []) {
+        device_passthrough = map (d:
+          { path = d.path; }
+          // lib.optionalAttrs (d.uid != null) { uid = d.uid; }
+          // lib.optionalAttrs (d.gid != null) { gid = d.gid; }
+          // lib.optionalAttrs (d.mode != null) { mode = d.mode; }
+          // lib.optionalAttrs d.deny_write { deny_write = true; }
+        ) meta.devices;
+      })
+      // (lib.optionalAttrs (meta.hook_script != null) { hook_script_file_id = meta.hook_script; })
       // (lib.optionalAttrs (meta.pool != null) { pool_id = meta.pool; })
       // (let d = computeDescription meta; in lib.optionalAttrs (d != null) { description = d; })
       // (mkNetwork (meta // { _name = name; })) // (mkLifecycle lifecycleMeta)
@@ -407,7 +442,7 @@ in rec {
       vm_id = meta.vm_id;
       name = name;
       tags = meta.tags;
-      started = true;
+      started = meta.start_on_create;
 
       cpu = { cores = meta.cpu_cores; type = "host"; };
       memory = { dedicated = meta.memory_mb; };
@@ -444,8 +479,7 @@ in rec {
       initialization = {
         datastore_id = "local-storage";
         type = "nocloud";
-        dns = { servers = net.dns_servers; }
-          // lib.optionalAttrs (net.dns_domain != null) { domain = net.dns_domain; };
+        dns = dnsFor meta;
       } // (
         # New-style: a custom user-data snippet is generated by
         # nix/fleet/resources.nix's renderCloudInitSnippet, uploaded as
@@ -547,6 +581,8 @@ in rec {
       # on every VM; pattern is the community-scripts default.
       serial_device = [{ device = "socket"; }];
     }
+    // (lifecycleAttrs meta)
+    // lib.optionalAttrs (!meta.onboot) { on_boot = false; }
     // lib.optionalAttrs (newStyle && imageKind == "clone") {
       clone = { vm_id = imageCloneVmId; datastore_id = "local-storage"; full = true; }
         // lib.optionalAttrs (meta ? cloneFrom && false) {};  # placeholder for cross-host clones

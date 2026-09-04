@@ -66,11 +66,24 @@ in
     lxc-debian = lxc { vm_id = 9108; internal_ip = "192.0.2.108"; image = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst";
       ignore_changes = [ "tags" ]; note = { title = "Debian guest"; summary = "structured note"; stateful = true; }; };
 
+    # ── LXC: new surface (PLAN.md Appendix A, commits 4-5) ──
+    lxc-lifecycle = lxc { vm_id = 9109; internal_ip = "192.0.2.109";
+      protection = true; onboot = false; start_on_create = false;
+      startup = { order = 5; up_delay = 20; };
+      dns = { servers = [ "192.0.2.54" ]; domain = "lab.golden.test"; }; };
+    lxc-devices = lxc { vm_id = 9110; internal_ip = "192.0.2.110"; arch = "arm64";
+      features = { mknod = true; mount = [ "nfs" "cifs" ]; };
+      devices = [ { path = "/dev/net/tun"; } { path = "/dev/dri/renderD128"; gid = 44; mode = "0660"; } { path = "/dev/apex_0"; deny_write = true; } ];
+      hook_script = "local:snippets/golden-hook.sh"; dns.domain = ""; };
+
     # ── VM: every mkVm class ──
     netgate = vm { vm_id = 9201; ip = "198.51.100.201"; internal_ip = "192.0.2.201"; vm_template = "nixos"; tags = [ "golden" ]; };
     headscale-router = vm { vm_id = 9202; internal_ip = "192.0.2.202"; vm_template = "nixos"; };
     vm-nixos-template = vm { vm_id = 9203; internal_ip = "192.0.2.203"; vm_template = "nixos"; cpu_cores = 4; memory_mb = 4096; root_disk_gb = 32; };
     vm-clone = vm { vm_id = 9204; internal_ip = "192.0.2.204"; image = "clone:9000"; data_disks = [ { size_gb = 100; mount_path = "/data"; } ]; };
+    vm-lifecycle = vm { vm_id = 9206; internal_ip = "192.0.2.206"; vm_template = "nixos";
+      protection = true; onboot = false; start_on_create = false; startup = { order = 1; down_delay = 60; };
+      dns.servers = [ "192.0.2.54" ]; };
     vm-file = vm { vm_id = 9205; internal_ip = "192.0.2.205"; image = "file:local:iso/example-cloud-amd64.qcow2";
       cloud_init = { users = [ { name = "operator"; ssh_keys = [ "ssh-ed25519 AAAAGOLDEN operator@example.test" ]; } ]; runcmd = [ "echo golden" ]; }; };
   };

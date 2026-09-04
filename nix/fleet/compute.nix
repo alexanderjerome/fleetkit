@@ -52,6 +52,45 @@ let
       nesting = lib.mkOption { type = lib.types.bool; default = true; description = "Allow nested containers/namespaces inside the LXC (PVE `nesting` feature; needed for systemd-nspawn, Docker, nix sandboxed builds)."; };
       fuse = lib.mkOption { type = lib.types.bool; default = true; description = "Allow FUSE filesystem mounts inside the LXC (PVE `fuse` feature)."; };
       keyctl = lib.mkOption { type = lib.types.bool; default = true; description = "Allow the keyctl() syscall inside the LXC (PVE `keyctl` feature; needed by systemd-based guests)."; };
+      mknod = lib.mkOption { type = lib.types.bool; default = false; description = "Allow creating device nodes inside the LXC (PVE `mknod` feature). Emitted only when true — a non-root API token 403s on the field otherwise."; };
+      mount = lib.mkOption {
+        type = lib.types.listOf (lib.types.enum [ "nfs" "cifs" ]);
+        default = [];
+        example = [ "nfs" "cifs" ];
+        description = "Filesystem types the LXC may mount itself (PVE `mount` feature). PVE accepts nfs and cifs; FUSE is the separate `fuse` flag. Emitted only when non-empty.";
+      };
+    };
+  };
+  startupOpts = lib.types.submodule {
+    options = {
+      order = lib.mkOption { type = lib.types.nullOr lib.types.ints.unsigned; default = null; example = 10; description = "PVE start/shutdown order (lower starts first). null = PVE default (any order)."; };
+      up_delay = lib.mkOption { type = lib.types.nullOr lib.types.ints.unsigned; default = null; example = 30; description = "Seconds PVE waits after starting this guest before starting the next one."; };
+      down_delay = lib.mkOption { type = lib.types.nullOr lib.types.ints.unsigned; default = null; example = 30; description = "Seconds PVE waits after stopping this guest before stopping the next one."; };
+    };
+  };
+  dnsOpts = lib.types.submodule {
+    options = {
+      servers = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
+        example = [ "192.0.2.53" "1.1.1.1" ];
+        description = "Create-time resolvers written into this guest's PVE config. null = inherit fleet.network.dns_servers.";
+      };
+      domain = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "lab.example.internal";
+        description = "Create-time DNS search domain for this guest. null = inherit fleet.network.dns_domain; \"\" = explicitly none.";
+      };
+    };
+  };
+  deviceOpts = lib.types.submodule {
+    options = {
+      path = lib.mkOption { type = lib.types.strMatching "^/dev/.+"; example = "/dev/dri/renderD128"; description = "Host device node passed through into the LXC (PVE `devN:` entry). Examples: /dev/net/tun, /dev/dri/renderD128, /dev/dri/card0, /dev/kfd, /dev/apex_0."; };
+      uid = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 0 65535); default = null; description = "Owner uid of the node inside the container. null = PVE default (root)."; };
+      gid = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 0 65535); default = null; example = 44; description = "Owner gid of the node inside the container (community scripts use 44 = video for /dev/dri). Unprivileged CTs need this to match the guest's group."; };
+      mode = lib.mkOption { type = lib.types.nullOr (lib.types.strMatching "^0[0-7]{3}$"); default = null; example = "0660"; description = "Access mode of the node inside the container. null = PVE default."; };
+      deny_write = lib.mkOption { type = lib.types.bool; default = false; description = "Expose the device read-only."; };
     };
   };
   importOpts = lib.types.submodule {
@@ -347,7 +386,58 @@ let
       features = lib.mkOption {
         type = featuresOpts;
         default = {};
-        description = "PVE container feature flags ({ nesting, fuse, keyctl }, all default true; LXC only).";
+        description = "PVE container feature flags ({ nesting, fuse, keyctl } default true; { mknod, mount } default off; LXC only).";
+      };
+
+      # ── Lifecycle (both kinds) ──
+      protection = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "PVE guest protection flag (blocks destroy/remove in the PVE UI and API). Distinct from `protect`, which is the Terraform prevent_destroy lifecycle. Emitted only when true.";
+      };
+      onboot = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Start the guest when the PVE node boots (`onboot`).";
+      };
+      start_on_create = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Start the guest right after Terraform creates it. false = create stopped (appliance images that need a first manual step).";
+      };
+      startup = lib.mkOption {
+        type = lib.types.nullOr startupOpts;
+        default = null;
+        example = lib.literalExpression ''{ order = 10; up_delay = 30; }'';
+        description = "PVE startup ordering ({ order, up_delay, down_delay }). null = not managed.";
+      };
+      dns = lib.mkOption {
+        type = dnsOpts;
+        default = {};
+        description = "Per-guest create-time DNS override ({ servers, domain }); nulls inherit fleet.network.dns_servers / dns_domain. The declarative twin of the legacy var_ns / var_searchdomain.";
+      };
+
+      # ── LXC-only ──
+      arch = lib.mkOption {
+        type = lib.types.enum [ "amd64" "arm64" "armhf" "i386" ];
+        default = "amd64";
+        description = "Container CPU architecture (PVE `arch`, bpg cpu.architecture). Emitted only when not amd64. LXC only.";
+      };
+      devices = lib.mkOption {
+        type = lib.types.listOf deviceOpts;
+        default = [];
+        example = lib.literalExpression ''
+          [ { path = "/dev/net/tun"; }
+            { path = "/dev/dri/renderD128"; gid = 44; }
+            { path = "/dev/dri/card0"; gid = 44; } ]
+        '';
+        description = "Host device nodes passed through into the container (bpg device_passthrough → PVE devN entries): TUN for VPN software, /dev/dri + /dev/kfd + /dev/nvidia* for GPU transcoding, /dev/apex_0 for a Coral TPU. Replaces the lxc.conf edits the community scripts made. LXC only.";
+      };
+      hook_script = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "local:snippets/post-create.sh";
+        description = "PVE hook script file id (a snippets file, e.g. a `kind = \"file\"` resource) run by PVE at the guest's lifecycle phases. LXC only.";
       };
 
       network_mode = lib.mkOption {
