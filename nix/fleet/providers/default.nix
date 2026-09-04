@@ -53,6 +53,12 @@ let
           description = "S3 key prefix for this instance's tfstate(s). Full path: s3://<bucket>/<prefix>/<stack>/terraform.tfstate";
         };
       };
+      minVersion = lib.mkOption {
+        type = lib.types.str;
+        default = "9.0";
+        example = "9.0";
+        description = "Lowest Proxmox VE major.minor this instance is expected to run. fleetkit's zero-touch NixOS LXC first boot needs PVE 9 (its NixOS LXC setup plugin writes the guest's eth0.network from the container's net0 at create time); `fleet pve status` warns when the live node is older. Informational for non-PVE providers.";
+      };
       destruction_policy = lib.mkOption {
         type = lib.types.enum [ "strict" "standard" "permissive" ];
         default = "standard";
