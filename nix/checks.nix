@@ -30,9 +30,15 @@ let
   fleetPkg = pkgs.callPackage ./pkgs/_launcher { };
 
 in {
+  # The toplevel drvPath goes through unsafeDiscardOutputDependency: a
+  # bare `.drvPath` string carries a "build all outputs" context, which
+  # turned this eval gate into a full build of the example NixOS closure
+  # (tens of GiB). Instantiating the derivation is what proves the module
+  # stack closes; building it proves nothing more about the schema.
   example-fleet = pkgs.runCommand "fleetkit-example-check" {
     hostsJson = example.packages.hostsJson;
-    exampleToplevelDrv = example.nixosConfigurations.example.config.system.build.toplevel.drvPath;
+    exampleToplevelDrv = builtins.unsafeDiscardOutputDependency
+      example.nixosConfigurations.example.config.system.build.toplevel.drvPath;
     stackIds = example.packages.tf-stack-ids;
   } ''
     test -s "$hostsJson"

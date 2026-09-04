@@ -29,7 +29,9 @@ in
   ];
 
   # ── Locale ─────────────────────────────────────────────────────
-  time.timeZone = "UTC";
+  # Framework default only — a host (or a catalog preset) may set its own
+  # zone without mkForce.
+  time.timeZone = lib.mkDefault "UTC";
 
   i18n = {
     defaultLocale = defaultLocale;
