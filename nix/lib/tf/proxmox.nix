@@ -415,6 +415,12 @@ in rec {
 
   # ── KVM/QEMU VM emitter ───────────────────────────────────────
   mkVm = name: meta:
+    # cloud_init.enable = false: no cloud-init drive, no initialization
+    # block at all (self-configuring appliance images). The key is removed
+    # rather than nulled — a null nested block is not valid Terraform JSON.
+    lib.removeAttrs (mkVmAttrs name meta) (lib.optional (!meta.cloud_init.enable) "initialization");
+
+  mkVmAttrs = name: meta:
     let
       # ── New-style explicit image dispatch ──
       # If meta.image is set, parse it as either "file:<file_id>" or
@@ -661,9 +667,6 @@ in rec {
     // lib.optionalAttrs (vmCfg.tablet != null) { tablet_device = vmCfg.tablet; }
     // (lifecycleAttrs meta)
     // lib.optionalAttrs (!meta.onboot) { on_boot = false; }
-    # cloud_init.enable = false: no cloud-init drive, no initialization
-    # block at all (self-configuring appliance images).
-    // lib.optionalAttrs (!meta.cloud_init.enable) { initialization = null; }
     // lib.optionalAttrs (newStyle && imageKind == "clone") {
       clone = { vm_id = imageCloneVmId; datastore_id = ds; full = true; }
         // lib.optionalAttrs (meta ? cloneFrom && false) {};  # placeholder for cross-host clones
@@ -786,6 +789,90 @@ in rec {
     opentelemetry_proto = meta.opentelemetry_proto or "http";
     opentelemetry_path = meta.opentelemetry_path or "/v1/metrics";
   } // lib.optionalAttrs (meta ? disable) { disable = meta.disable; }
+    // (mkLifecycle meta);
+
+  # ── PVE SDN (zone → vnet → subnet) ─────────────────────────────
+  # bpg names: proxmox_sdn_zone_{simple,vlan}, proxmox_sdn_vnet,
+  # proxmox_sdn_subnet, proxmox_sdn_applier (the older
+  # proxmox_virtual_environment_sdn_* names are deprecated, same story as
+  # cluster-options). Confirm them against the pinned provider with
+  # `tofu providers schema -json` on first use.
+  mkSdnZone = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.zone_id or name;
+  } // lib.optionalAttrs (meta ? nodes) { nodes = meta.nodes; }
+    // lib.optionalAttrs (meta ? mtu) { mtu = meta.mtu; }
+    // lib.optionalAttrs (meta ? dns_zone) { dns_zone = meta.dns_zone; }
+    // lib.optionalAttrs (meta ? ipam) { ipam = meta.ipam; }
+    // lib.optionalAttrs ((meta.zone_type or "simple") == "vlan") { bridge = meta.bridge; }
+    // (mkLifecycle meta);
+
+  mkSdnVnet = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.vnet_id or name;
+    zone = meta.zone;
+  } // lib.optionalAttrs (meta ? tag) { tag = meta.tag; }
+    // lib.optionalAttrs (meta ? vlan_aware) { vlan_aware = meta.vlan_aware; }
+    // lib.optionalAttrs (meta ? alias) { alias = meta.alias; }
+    // lib.optionalAttrs (meta ? isolate_ports) { isolate_ports = meta.isolate_ports; }
+    // (mkLifecycle meta);
+
+  mkSdnSubnet = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    vnet = meta.vnet;
+    cidr = meta.cidr;
+  } // lib.optionalAttrs (meta ? gateway) { gateway = meta.gateway; }
+    // lib.optionalAttrs (meta ? snat) { snat = meta.snat; }
+    // lib.optionalAttrs (meta ? dhcp_range) { dhcp_range = meta.dhcp_range; }
+    // lib.optionalAttrs (meta ? dhcp_dns_server) { dhcp_dns_server = meta.dhcp_dns_server; }
+    // (mkLifecycle meta);
+
+  # One applier per (stack, provider instance): SDN changes are staged in
+  # PVE until applied; this resource applies them and re-runs whenever any
+  # SDN resource of the stack changes.
+  mkSdnApplier = instance: sdnAddrs: {
+    provider = "proxmox.${instance}";
+    depends_on = sdnAddrs;
+    lifecycle = [{ replace_triggered_by = sdnAddrs; }];
+  };
+
+  # Node VLAN interface (e.g. vmbr0.42) — replaces the manual
+  # /etc/network/interfaces edit the community bridge picker assumed.
+  mkLinuxVlan = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    node_name = resolveNode meta;
+    name = meta.interface_name or name;
+  } // lib.optionalAttrs (meta ? interface) { interface = meta.interface; }
+    // lib.optionalAttrs (meta ? vlan) { vlan = meta.vlan; }
+    // lib.optionalAttrs (meta ? address) { address = meta.address; }
+    // lib.optionalAttrs (meta ? gateway) { gateway = meta.gateway; }
+    // lib.optionalAttrs (meta ? mtu) { mtu = meta.mtu; }
+    // lib.optionalAttrs (meta ? comment) { comment = meta.comment; }
+    // (mkLifecycle meta);
+
+  # Cluster storages — the declarative twin of storage-share-helper.sh
+  # (NFS) and of adding a directory storage in the UI. `content` lists PVE
+  # content types (images, rootdir, vztmpl, iso, snippets, backup, import).
+  mkStorageNfs = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.storage_id or name;
+    server = meta.server;
+    export = meta.export;
+    content = meta.content or [ "images" "rootdir" ];
+  } // lib.optionalAttrs (meta ? nodes) { nodes = meta.nodes; }
+    // lib.optionalAttrs (meta ? options) { options = meta.options; }
+    // lib.optionalAttrs (meta ? shared) { shared = meta.shared; }
+    // lib.optionalAttrs (meta ? disable) { disable = meta.disable; }
+    // (mkLifecycle meta);
+
+  mkStorageDir = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.storage_id or name;
+    path = meta.path;
+    content = meta.content or [ "images" "rootdir" "vztmpl" "iso" "snippets" "backup" ];
+  } // lib.optionalAttrs (meta ? nodes) { nodes = meta.nodes; }
+    // lib.optionalAttrs (meta ? shared) { shared = meta.shared; }
+    // lib.optionalAttrs (meta ? disable) { disable = meta.disable; }
     // (mkLifecycle meta);
 
   # Datacenter-level options (singleton per cluster). The only field

@@ -39,6 +39,10 @@ let
           # Proxmox
           "bridge" "pool" "group" "acl" "realm" "dns" "download" "file" "cluster-options"
           "metrics-server"
+          # Proxmox SDN (zone → vnet → subnet; an applier is emitted per
+          # stack automatically), node VLAN interfaces, storages
+          "sdn-zone" "sdn-vnet" "sdn-subnet" "linux-vlan"
+          "storage-nfs" "storage-dir"
           # Xen-Orchestra (data-source only)
           "xo-pool" "xo-network" "xo-sr" "xo-template" "xo-iso"
           # Cloudflare

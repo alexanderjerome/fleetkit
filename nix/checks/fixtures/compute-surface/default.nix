@@ -46,9 +46,18 @@ in
     cluster = { nodes = [ "pve1" "pve2" ]; primary_node = "pve1"; };
   };
 
-  config.fleet.resources = {
-    golden-pool = { env = "golden"; stack = "lxc"; provider_instance = pi; kind = "pool"; pool_id = "golden"; comment = "fixture pool"; };
-    vmbr9 = { env = "golden"; stack = "lxc"; provider_instance = pi; kind = "bridge"; node = "pve1"; ports = [ "eth9" ]; comment = "fixture bridge"; };
+  config.fleet.resources = let r = extra: { env = "golden"; stack = "lxc"; provider_instance = pi; } // extra; in {
+    golden-pool = r { kind = "pool"; pool_id = "golden"; comment = "fixture pool"; };
+    vmbr9 = r { kind = "bridge"; node = "pve1"; ports = [ "eth9" ]; comment = "fixture bridge"; };
+    # SDN: a simple zone with the `lab` VNet lxc-declared attaches to, and
+    # a VLAN zone on vmbr0.
+    labzone = r { kind = "sdn-zone"; zone_id = "labzone"; nodes = [ "pve1" "pve2" ]; mtu = 1400; };
+    vlanzone = r { kind = "sdn-zone"; zone_type = "vlan"; bridge = "vmbr0"; };
+    lab = r { kind = "sdn-vnet"; zone = "labzone"; alias = "lab network"; };
+    lab-subnet = r { kind = "sdn-subnet"; vnet = "lab"; cidr = "198.51.100.0/24"; gateway = "198.51.100.1"; snat = true; dhcp_range = [ { start_address = "198.51.100.100"; end_address = "198.51.100.199"; } ]; };
+    vmbr0-42 = r { kind = "linux-vlan"; node = "pve1"; interface_name = "vmbr0.42"; comment = "iot vlan"; };
+    nfs-media = r { kind = "storage-nfs"; storage_id = "media"; server = "192.0.2.250"; export = "/srv/media"; content = [ "images" "backup" ]; nodes = [ "pve1" "pve2" ]; };
+    local-import = r { kind = "storage-dir"; storage_id = "imports"; path = "/var/lib/vz/import"; content = [ "import" "iso" ]; };
   };
 
   # ── LXC: one host per legacy network_mode + source path ──

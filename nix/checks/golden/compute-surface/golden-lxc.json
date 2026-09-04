@@ -33,6 +33,95 @@
         "provider": "proxmox.golden"
       }
     },
+    "proxmox_sdn_applier": {
+      "golden-sdn": {
+        "depends_on": [
+          "proxmox_sdn_zone_simple.labzone",
+          "proxmox_sdn_zone_vlan.vlanzone",
+          "proxmox_sdn_vnet.lab",
+          "proxmox_sdn_subnet.lab-subnet"
+        ],
+        "lifecycle": [
+          {
+            "replace_triggered_by": [
+              "proxmox_sdn_zone_simple.labzone",
+              "proxmox_sdn_zone_vlan.vlanzone",
+              "proxmox_sdn_vnet.lab",
+              "proxmox_sdn_subnet.lab-subnet"
+            ]
+          }
+        ],
+        "provider": "proxmox.golden"
+      }
+    },
+    "proxmox_sdn_subnet": {
+      "lab-subnet": {
+        "cidr": "198.51.100.0/24",
+        "dhcp_range": [
+          {
+            "end_address": "198.51.100.199",
+            "start_address": "198.51.100.100"
+          }
+        ],
+        "gateway": "198.51.100.1",
+        "provider": "proxmox.golden",
+        "snat": true,
+        "vnet": "lab"
+      }
+    },
+    "proxmox_sdn_vnet": {
+      "lab": {
+        "alias": "lab network",
+        "id": "lab",
+        "provider": "proxmox.golden",
+        "zone": "labzone"
+      }
+    },
+    "proxmox_sdn_zone_simple": {
+      "labzone": {
+        "id": "labzone",
+        "mtu": 1400,
+        "nodes": [
+          "pve1",
+          "pve2"
+        ],
+        "provider": "proxmox.golden"
+      }
+    },
+    "proxmox_sdn_zone_vlan": {
+      "vlanzone": {
+        "bridge": "vmbr0",
+        "id": "vlanzone",
+        "provider": "proxmox.golden"
+      }
+    },
+    "proxmox_storage_directory": {
+      "local-import": {
+        "content": [
+          "import",
+          "iso"
+        ],
+        "id": "imports",
+        "path": "/var/lib/vz/import",
+        "provider": "proxmox.golden"
+      }
+    },
+    "proxmox_storage_nfs": {
+      "nfs-media": {
+        "content": [
+          "images",
+          "backup"
+        ],
+        "export": "/srv/media",
+        "id": "media",
+        "nodes": [
+          "pve1",
+          "pve2"
+        ],
+        "provider": "proxmox.golden",
+        "server": "192.0.2.250"
+      }
+    },
     "proxmox_virtual_environment_container": {
       "lxc-btc": {
         "console": {
@@ -839,6 +928,14 @@
         "tags": [],
         "unprivileged": false,
         "vm_id": 9106
+      }
+    },
+    "proxmox_virtual_environment_network_linux_vlan": {
+      "vmbr0-42": {
+        "comment": "iot vlan",
+        "name": "vmbr0.42",
+        "node_name": "pve1",
+        "provider": "proxmox.golden"
       }
     },
     "proxmox_virtual_environment_pool": {

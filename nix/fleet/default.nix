@@ -118,7 +118,7 @@ let
   #
   #    Cluster-wide kinds (pool, acl, realm, cluster-options) skip
   #    this — bpg doesn't take node_name for them.
-  nodeScopedResourceKinds = [ "bridge" "file" "download" "dns" ];
+  nodeScopedResourceKinds = [ "bridge" "file" "download" "dns" "linux-vlan" ];
 
   isProxmoxMultiNode = pi:
     let
@@ -204,6 +204,25 @@ let
       ++ lib.optional (declared && (e.ip or "") != "" && !(elem e.ip statics)) "${n}: ip ${e.ip} is not the address of any static interface"
   ) (attrValues enabledCompute);
 
+  # 11. SDN references: an interface's `vnet` and a subnet's `vnet` must
+  #     name an sdn-vnet resource on the same provider instance; a vnet's
+  #     `zone` an sdn-zone there; a vlan zone needs `bridge`.
+  declaredVnets = lib.unique (mapAttrsToList (n: r: "${r.provider_instance}/${r.vnet_id or n}")
+    (filterAttrs (_: r: r.kind == "sdn-vnet") cfg.resources));
+  declaredZones = lib.unique (mapAttrsToList (n: r: "${r.provider_instance}/${r.zone_id or n}")
+    (filterAttrs (_: r: r.kind == "sdn-zone") cfg.resources));
+  sdnViolations =
+    lib.concatMap (e: lib.concatMap (x:
+        lib.optional (x.vnet != null && !(elem "${e.provider_instance}/${x.vnet}" declaredVnets))
+          "${nameOf e}: interface vnet \"${x.vnet}\" has no sdn-vnet resource on ${e.provider_instance}")
+      (e.interfaces or [])) (attrValues provisionedCompute)
+    ++ mapAttrsToList (n: r: "${n}: sdn-vnet zone \"${r.zone}\" has no sdn-zone resource on ${r.provider_instance}")
+      (filterAttrs (n: r: r.kind == "sdn-vnet" && !(elem "${r.provider_instance}/${r.zone}" declaredZones)) cfg.resources)
+    ++ mapAttrsToList (n: r: "${n}: sdn-subnet vnet \"${r.vnet}\" has no sdn-vnet resource on ${r.provider_instance}")
+      (filterAttrs (n: r: r.kind == "sdn-subnet" && !(elem "${r.provider_instance}/${r.vnet}" declaredVnets)) cfg.resources)
+    ++ mapAttrsToList (n: r: "${n}: sdn-zone of zone_type vlan needs `bridge`")
+      (filterAttrs (n: r: r.kind == "sdn-zone" && (r.zone_type or "simple") == "vlan" && !(r ? bridge)) cfg.resources);
+
   # 10. VM-only hardware settings on a container are a mistake.
   vmOnlyOnLxc = filter
     (e: e.kind == "container" && (
@@ -217,6 +236,11 @@ let
 
   # ── Throw chain ────────────────────────────────────────────────
   validated =
+    throwIf (sdnViolations != [])
+      ''
+        FLEET SDN reference violations:
+          ${concatStringsSep "\n  " sdnViolations}
+      '' (
     throwIf (vmOnlyOnLxc != [])
       ''
         FLEET VM-only options (vm.* / cloud_init.enable / cloud_init.datastore) set on container entries:
@@ -291,7 +315,7 @@ let
             ) instances)
           ) cfg.providers)}
       ''
-    true)))))))));
+    true))))))))));
 
 in {
   imports = [
