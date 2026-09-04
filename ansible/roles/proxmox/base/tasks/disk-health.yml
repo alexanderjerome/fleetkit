@@ -1,0 +1,52 @@
+---
+# SMART monitoring: smartmontools + nvme-cli, smartd enabled, and a weekly
+# short self-test on every disk (port of community tools/pve/disk-health.sh,
+# which ran the test once by hand).
+
+- name: install smartmontools and nvme-cli
+  ansible.builtin.apt:
+    name: [smartmontools, nvme-cli]
+    state: present
+
+- name: enable smartd
+  ansible.builtin.systemd:
+    name: smartd
+    enabled: true
+    state: started
+
+- name: install weekly SMART self-test service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/smart-selftest.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=SMART short self-test on every disk
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'for d in $(lsblk -dno NAME,TYPE | awk "\$2==\"disk\"{print \$1}"); do smartctl -t short /dev/$d || true; done'
+  register: proxmox_smart_service
+
+- name: install weekly SMART self-test timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/smart-selftest.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=weekly SMART short self-test
+
+      [Timer]
+      OnCalendar=Sat 02:00
+      RandomizedDelaySec=1h
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  register: proxmox_smart_timer
+
+- name: enable SMART self-test timer
+  ansible.builtin.systemd:
+    name: smart-selftest.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ proxmox_smart_service.changed or proxmox_smart_timer.changed }}"

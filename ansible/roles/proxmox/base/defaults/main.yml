@@ -28,3 +28,10 @@ grow_storage_vgs:
 grow_storage_lvs:
   - { vg: pve, lv: data, extend: "+100%FREE" }
   - { vg: pbs, lv: data, extend: "+100%FREE" }
+
+# fleet_pve_host_tweaks ↔ fleet.settings.providers.proxmox.hostTweaks.
+# Exported by `fleet ansible inventory` from settings-json; every key is
+# optional and off/null by default (soft-skip). Keys: microcode,
+# kernelClean, kernelPin, scalingGovernor, nicOffloadingFix, diskHealth
+# (proxmox/base) and ipTag, monitorAll (proxmox/pve).
+fleet_pve_host_tweaks: {}

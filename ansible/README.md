@@ -87,6 +87,7 @@ feature; a *required* variable is asserted with an actionable message.
 | `fleet_domain_internal` | `domain.internal` | no → short names only | proxmox/base peer-hosts |
 | `fleet_proxmox_cluster_hosts` | — (cluster member name→IP list) | default `[]` | proxmox/base peer-hosts, pve cluster-join |
 | `fleet_acme_email` | `acmeEmail` | assert iff `pve_acme_domains` set | proxmox/pve acme |
+| `fleet_pve_host_tweaks` | `providers.proxmox.hostTweaks` (exported by `fleet ansible inventory`) | no → all off | proxmox/base microcode, kernel-clean, kernel-pin, scaling-governor, nic-offloading-fix, disk-health; proxmox/pve iptag, monitor-all |
 | `pve_cluster_creator` | — | assert on joiners | proxmox/pve cluster-join, uncluster task |
 | `pve_acme_cf_token_sops_path` / `_keys` | — (SOPS file + key path) | assert iff ACME used | proxmox/pve acme |
 | `pbs_s3_endpoint` / `pbs_s3_region` / `pbs_s3_bucket` | — (S3 backend; e.g. in-fleet Garage) | **yes** (assert) | proxmox/pbs |

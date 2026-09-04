@@ -21,3 +21,29 @@
 
 - import_tasks: peer-hosts.yml
   tags: [proxmox-base, peer-hosts]
+
+# ── Host tweaks (fleet_pve_host_tweaks ↔ providers.proxmox.hostTweaks) ──
+# Ports of the community tools/pve/*.sh helpers; each soft-skips unless
+# its key is set.
+- import_tasks: microcode.yml
+  tags: [proxmox-base, host-tweaks, microcode]
+  when: fleet_pve_host_tweaks.microcode | default(false)
+
+- import_tasks: kernel-clean.yml
+  tags: [proxmox-base, host-tweaks, kernel-clean]
+  when: fleet_pve_host_tweaks.kernelClean | default(false)
+
+- import_tasks: kernel-pin.yml
+  tags: [proxmox-base, host-tweaks, kernel-pin]
+
+- import_tasks: scaling-governor.yml
+  tags: [proxmox-base, host-tweaks, scaling-governor]
+  when: (fleet_pve_host_tweaks.scalingGovernor | default(none)) is not none
+
+- import_tasks: nic-offloading-fix.yml
+  tags: [proxmox-base, host-tweaks, nic-offloading-fix]
+  when: fleet_pve_host_tweaks.nicOffloadingFix | default(false)
+
+- import_tasks: disk-health.yml
+  tags: [proxmox-base, host-tweaks, disk-health]
+  when: fleet_pve_host_tweaks.diskHealth | default(false)

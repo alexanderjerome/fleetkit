@@ -58,6 +58,17 @@
     #   upstreamResolvers = [ "192.0.2.1" "1.1.1.1" ]; # coredns forwarders
     # };
 
+    # # Proxmox provider defaults and hypervisor tweaks (ansible-applied
+    # # from these values by `fleet ansible run pve`):
+    # providers.proxmox = {
+    #   defaultDatastore = "local-lvm";     # where disks land unless a host says otherwise
+    #   lxcTemplateDatastore = "local";     # where the NixOS LXC template is uploaded
+    #   hostTweaks = {
+    #     microcode = true; diskHealth = true; kernelClean = true;
+    #     scalingGovernor = "performance"; ipTag = true; monitorAll = false;
+    #   };
+    # };
+
     # # In-fleet nix binary caches, once you have a builder host.
     # cache.substituters = [ "http://192.0.2.101:5000" ];
     # cache.trustedPublicKeys = [ "builder:REPLACEME" ];

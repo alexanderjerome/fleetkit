@@ -210,6 +210,22 @@
             `kind = "file"` resource with source = "nixos-lxc-image".
           '';
         };
+        hostTweaks = lib.mkOption {
+          default = {};
+          description = "Hypervisor-side conveniences the community `tools/pve/*.sh` scripts used to apply by hand, now driven by ansible (roles proxmox/base and proxmox/pve) from these values. `fleet ansible inventory` exports them as the `fleet_pve_host_tweaks` variable.";
+          type = lib.types.submodule {
+            options = {
+              microcode = lib.mkOption { type = lib.types.bool; default = false; description = "Install the CPU microcode package for the node's vendor (intel-microcode / amd64-microcode; enables non-free-firmware). Legacy microcode.sh."; };
+              kernelClean = lib.mkOption { type = lib.types.bool; default = false; description = "Purge old PVE kernels on each ansible run, keeping the running one and the newest. Legacy kernel-clean.sh."; };
+              kernelPin = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "6.14.8-2-pve"; description = "Pin the node to this kernel version with proxmox-boot-tool (null = unpinned). Legacy kernel-pin.sh."; };
+              scalingGovernor = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "performance" "powersave" "ondemand" "conservative" "schedutil" ]); default = null; description = "CPU frequency scaling governor applied at boot (null = leave the kernel default). Legacy scaling-governor.sh."; };
+              nicOffloadingFix = lib.mkOption { type = lib.types.bool; default = false; description = "Disable NIC offloading (ethtool) on Intel e1000/e1000e adapters at boot to work around hangs. Legacy nic-offloading-fix.sh."; };
+              diskHealth = lib.mkOption { type = lib.types.bool; default = false; description = "Install smartmontools + nvme-cli and run a weekly SMART short self-test on every disk. Legacy disk-health.sh."; };
+              ipTag = lib.mkOption { type = lib.types.bool; default = false; description = "Run the IP-Tag service that keeps a `<ip>` tag on every guest in the PVE UI. Legacy add-iptag.sh. PVE nodes only."; };
+              monitorAll = lib.mkOption { type = lib.types.bool; default = false; description = "Run the ping-instances service that restarts guests that stop answering. Legacy monitor-all.sh. PVE nodes only."; };
+            };
+          };
+        };
         singleBridgeInstances = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];

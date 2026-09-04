@@ -16,6 +16,10 @@
 #   * docs            — the options documentation site builds with
 #                       warningsAreErrors: every option fleetkit declares
 #                       carries a description, forever.
+#   * ansible-syntax   — every framework playbook passes
+#                       `ansible-playbook --syntax-check` against the role
+#                       tree (catches a broken task file or an undefined
+#                       role before a hypervisor run does).
 #   * compute-surface-golden — the Terraform JSON rendered for a fixture
 #                       fleet that hits every LXC/VM emitter path
 #                       (nix/checks/fixtures/compute-surface/) is
@@ -83,6 +87,21 @@ in {
     nativeBuildInputs = [ fleetPkg ];
   } ''
     fleet --help > /dev/null
+    touch $out
+  '';
+
+  # Framework playbooks parse and their roles resolve. Syntax-only: no
+  # host is contacted (`-i localhost,` satisfies inventory loading).
+  ansible-syntax = pkgs.runCommand "fleetkit-ansible-syntax-check" {
+    nativeBuildInputs = [ pkgs.ansible ];
+    src = ../ansible;
+  } ''
+    export HOME=$TMPDIR ANSIBLE_LOCAL_TEMP=$TMPDIR ANSIBLE_ROLES_PATH=$src/roles
+    printf '[defaults]\nhost_key_checking = False\n' > $TMPDIR/ansible.cfg
+    export ANSIBLE_CONFIG=$TMPDIR/ansible.cfg
+    for pb in pve pbs developer site; do
+      ansible-playbook --syntax-check -i localhost, "$src/playbooks/$pb.yml"
+    done
     touch $out
   '';
 

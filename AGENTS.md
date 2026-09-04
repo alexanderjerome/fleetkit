@@ -20,7 +20,7 @@ input and describe their fleet as data.
    secret decryption, backend auth, inventory generation, and runtime env
    (ansible paths, plugin caches). If an operation you need is missing, add a
    CLI verb; do not bypass.
-2. **`nix flake check` is the acceptance gate** — five checks: `example-fleet`
+2. **`nix flake check` is the acceptance gate** — six checks: `example-fleet`
    (parameter-surface completeness against the template), `example-tf-render`
    (every example stack renders valid Terraform JSON), `launcher` (CLI builds
    and runs), `docs` (options docs build with `warningsAreErrors`). All four

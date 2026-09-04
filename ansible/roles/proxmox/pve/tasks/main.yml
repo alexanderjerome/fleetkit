@@ -43,3 +43,12 @@
 - import_tasks: acme.yml
   tags: [pve, acme]
   when: pve_acme_domains is defined
+
+# ── Host tweaks, PVE-only (fleet_pve_host_tweaks ↔ providers.proxmox.hostTweaks) ──
+- import_tasks: iptag.yml
+  tags: [pve, host-tweaks, iptag]
+  when: fleet_pve_host_tweaks.ipTag | default(false)
+
+- import_tasks: monitor-all.yml
+  tags: [pve, host-tweaks, monitor-all]
+  when: fleet_pve_host_tweaks.monitorAll | default(false)
