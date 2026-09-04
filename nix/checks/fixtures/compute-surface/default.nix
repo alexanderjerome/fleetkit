@@ -76,6 +76,15 @@ in
       devices = [ { path = "/dev/net/tun"; } { path = "/dev/dri/renderD128"; gid = 44; mode = "0660"; } { path = "/dev/apex_0"; deny_write = true; } ];
       hook_script = "local:snippets/golden-hook.sh"; dns.domain = ""; };
 
+    lxc-declared = lxc { vm_id = 9111; internal_ip = "192.0.2.111"; ip = "198.51.100.111"; network_mode = "declared";
+      interfaces = [
+        { bridge = "vmbr1"; ipv4 = "192.0.2.111/22"; gateway = "192.0.2.1"; vlan = 42; mtu = 1400; mac = "BC:24:11:00:01:11";
+          ipv6 = { method = "static"; address = "2001:db8::111/64"; gateway = "2001:db8::1"; }; }
+        { name = "eth1"; vnet = "lab"; ipv4 = "198.51.100.111/24"; ipv6.method = "auto"; firewall = true; rate_limit_mbps = 100; }
+        { bridge = "vmbr0"; ipv4 = "dhcp"; }
+        { bridge = "vmbr2"; ipv4 = "manual"; ipv6.method = "dhcp"; }
+      ]; };
+
     # ── VM: every mkVm class ──
     netgate = vm { vm_id = 9201; ip = "198.51.100.201"; internal_ip = "192.0.2.201"; vm_template = "nixos"; tags = [ "golden" ]; };
     headscale-router = vm { vm_id = 9202; internal_ip = "192.0.2.202"; vm_template = "nixos"; };
@@ -84,6 +93,11 @@ in
     vm-lifecycle = vm { vm_id = 9206; internal_ip = "192.0.2.206"; vm_template = "nixos";
       protection = true; onboot = false; start_on_create = false; startup = { order = 1; down_delay = 60; };
       dns.servers = [ "192.0.2.54" ]; };
+    vm-declared = vm { vm_id = 9207; internal_ip = "192.0.2.207"; image = "clone:9000"; network_mode = "declared";
+      interfaces = [
+        { bridge = "vmbr1"; ipv4 = "192.0.2.207/24"; gateway = "192.0.2.1"; vlan = 7; mac = "BC:24:11:00:02:07"; }
+        { bridge = "vmbr0"; ipv4 = "dhcp"; model = "e1000"; firewall = true; mtu = 1; }
+      ]; };
     vm-file = vm { vm_id = 9205; internal_ip = "192.0.2.205"; image = "file:local:iso/example-cloud-amd64.qcow2";
       cloud_init = { users = [ { name = "operator"; ssh_keys = [ "ssh-ed25519 AAAAGOLDEN operator@example.test" ]; } ]; runcmd = [ "echo golden" ]; }; };
   };

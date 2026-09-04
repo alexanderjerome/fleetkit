@@ -84,6 +84,44 @@ let
       };
     };
   };
+  cidr4 = lib.types.strMatching "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$";
+  ipv6Opts = lib.types.submodule {
+    options = {
+      method = lib.mkOption {
+        type = lib.types.enum [ "none" "auto" "dhcp" "static" ];
+        default = "none";
+        description = "IPv6 configuration for this NIC: none (nothing emitted — the legacy \"disable\" too), auto (SLAAC), dhcp, or static (`address` required).";
+      };
+      address = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "2001:db8::10/64"; description = "Static IPv6 address in CIDR notation (method = static)."; };
+      gateway = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "2001:db8::1"; description = "IPv6 default gateway (method = static only)."; };
+    };
+  };
+  interfaceOpts = lib.types.submodule {
+    options = {
+      name = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "eth0"; description = "In-guest interface name (LXC). null = eth<index>. Ignored for VMs (the guest kernel names NICs)."; };
+      bridge = lib.mkOption { type = lib.types.str; default = "vmbr0"; example = "vmbr1"; description = "PVE bridge this NIC attaches to (PVE's stock default bridge is vmbr0). Ignored when `vnet` is set."; };
+      vnet = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "lab"; description = "PVE SDN VNet id to attach to instead of a bridge (PVE writes it into the `bridge=` field). Declare the VNet as a `kind = \"sdn-vnet\"` resource on the same provider instance."; };
+      ipv4 = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either (lib.types.enum [ "dhcp" "manual" ]) cidr4);
+        default = "dhcp";
+        example = "192.0.2.10/24";
+        description = "IPv4 config: \"dhcp\", \"manual\" (PVE ip=manual, the guest configures itself), a CIDR (the prefix is explicit — no hidden /24), or null (no IPv4 block).";
+      };
+      gateway = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "192.0.2.1"; description = "IPv4 default gateway (only with a static CIDR; at most one NIC per guest)."; };
+      ipv6 = lib.mkOption { type = ipv6Opts; default = {}; description = "IPv6 config ({ method, address, gateway })."; };
+      vlan = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 1 4094); default = null; example = 42; description = "802.1Q VLAN tag (PVE `tag=`)."; };
+      mtu = lib.mkOption {
+        type = lib.types.nullOr (lib.types.addCheck lib.types.int (m: m == 1 || (m >= 576 && m <= 65535)));
+        default = null;
+        example = 1400;
+        description = "NIC MTU (PVE `mtu=`): 576-65535, or 1 on a VM NIC to inherit the bridge MTU.";
+      };
+      mac = lib.mkOption { type = lib.types.nullOr (lib.types.strMatching "^([0-9A-F]{2}:){5}[0-9A-F]{2}$"); default = null; example = "BC:24:11:00:00:10"; description = "Pinned MAC address, uppercase colon-separated. null = PVE assigns one."; };
+      firewall = lib.mkOption { type = lib.types.bool; default = false; description = "Enable the PVE firewall on this NIC."; };
+      model = lib.mkOption { type = lib.types.enum [ "virtio" "e1000" "e1000e" "rtl8139" "vmxnet3" ]; default = "virtio"; description = "Virtual NIC model (VMs only; LXC NICs are veth)."; };
+      rate_limit_mbps = lib.mkOption { type = lib.types.nullOr lib.types.ints.positive; default = null; example = 100; description = "Egress rate limit in MB/s (PVE `rate=`)."; };
+    };
+  };
   deviceOpts = lib.types.submodule {
     options = {
       path = lib.mkOption { type = lib.types.strMatching "^/dev/.+"; example = "/dev/dri/renderD128"; description = "Host device node passed through into the LXC (PVE `devN:` entry). Examples: /dev/net/tun, /dev/dri/renderD128, /dev/dri/card0, /dev/kfd, /dev/apex_0."; };
@@ -441,9 +479,18 @@ let
       };
 
       network_mode = lib.mkOption {
-        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" ];
+        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" "declared" ];
         default = "single-internal";
-        description = "Which NIC/bridge layout the emitter generates: single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both), or one of the custom/special-case layouts.";
+        description = "Which NIC/bridge layout the emitter generates. \"declared\" = the NICs come from `interfaces` (any bridge/VNet, DHCP or explicit CIDR, VLAN, MTU, MAC, IPv6) — the general form; single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both) and the custom/special-case layouts are the legacy fixed shapes kept for compatibility.";
+      };
+      interfaces = lib.mkOption {
+        type = lib.types.listOf interfaceOpts;
+        default = [];
+        example = lib.literalExpression ''
+          [ { bridge = "vmbr1"; ipv4 = "192.0.2.10/24"; gateway = "192.0.2.1"; vlan = 42; }
+            { bridge = "vmbr0"; ipv4 = "dhcp"; ipv6.method = "auto"; mac = "BC:24:11:00:00:10"; } ]
+        '';
+        description = "Ordered NIC list for `network_mode = \"declared\"`; index i becomes net<i> (LXC: eth<i> unless `name` says otherwise). Empty for every other mode (validator-enforced).";
       };
 
       privileged = lib.mkOption {

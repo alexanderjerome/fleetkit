@@ -172,8 +172,45 @@ let
     (e: lib.optional ((e.dns.servers or null) == []) "${nameOf e}: dns.servers = [] (use null to inherit fleet.network.dns_servers)")
     (attrValues enabledCompute);
 
+  # 9. Declared network mode: interfaces present iff declared; per-NIC
+  #    consistency; internal_ip / ip must be one of the static
+  #    addresses (hostsJson, colmena targetHost and DNS use them).
+  hostPart = cidr: builtins.head (lib.splitString "/" cidr);
+  isCidr = v: v != null && v != "dhcp" && v != "manual";
+  nicViolations = lib.concatMap (e:
+    let
+      n = nameOf e;
+      ifs = e.interfaces or [];
+      declared = (e.network_mode or "") == "declared";
+      names = lib.imap0 (i: x: if x.name != null then x.name else "eth${toString i}") ifs;
+      statics = map hostPart (map (x: x.ipv4) (filter (x: isCidr x.ipv4) ifs));
+      v4gw = length (filter (x: x.gateway != null) ifs);
+      v6gw = length (filter (x: x.ipv6.gateway != null) ifs);
+    in
+      lib.optional (declared && ifs == []) "${n}: network_mode = \"declared\" needs at least one entry in `interfaces`"
+      ++ lib.optional (!declared && ifs != []) "${n}: `interfaces` is only read by network_mode = \"declared\" (current: ${e.network_mode})"
+      ++ lib.optional (lib.unique names != names) "${n}: duplicate interface names"
+      ++ lib.optional (e.kind == "container" && lib.any (x: builtins.match "eth[0-9]+" x == null) names) "${n}: LXC interface names must be ethN (the NixOS side assumes it)"
+      ++ lib.optional (v4gw > 1) "${n}: more than one interface carries an IPv4 gateway"
+      ++ lib.optional (v6gw > 1) "${n}: more than one interface carries an IPv6 gateway"
+      ++ lib.concatMap (x:
+           lib.optional (x.vnet != null && x.bridge != "vmbr0") "${n}: set either `bridge` or `vnet` on an interface, not both"
+           ++ lib.optional (x.gateway != null && !(isCidr x.ipv4)) "${n}: an IPv4 gateway needs a static ipv4 CIDR"
+           ++ lib.optional (x.ipv6.method == "static" && x.ipv6.address == null) "${n}: ipv6.method = static needs ipv6.address"
+           ++ lib.optional (x.ipv6.method != "static" && x.ipv6.address != null) "${n}: ipv6.address is only used with ipv6.method = static"
+           ++ lib.optional (x.ipv6.method != "static" && x.ipv6.gateway != null) "${n}: ipv6.gateway is only used with ipv6.method = static")
+         ifs
+      ++ lib.optional (declared && (e.internal_ip or "") != "" && !(elem e.internal_ip statics)) "${n}: internal_ip ${e.internal_ip} is not the address of any static interface"
+      ++ lib.optional (declared && (e.ip or "") != "" && !(elem e.ip statics)) "${n}: ip ${e.ip} is not the address of any static interface"
+  ) (attrValues enabledCompute);
+
   # ── Throw chain ────────────────────────────────────────────────
   validated =
+    throwIf (nicViolations != [])
+      ''
+        FLEET interface violations:
+          ${concatStringsSep "\n  " nicViolations}
+      '' (
     throwIf (lxcOnlyOnVm != [])
       ''
         FLEET LXC-only options set on VM entries (devices / hook_script / arch / features.mknod / features.mount):
@@ -238,7 +275,7 @@ let
             ) instances)
           ) cfg.providers)}
       ''
-    true)))))));
+    true))))))));
 
 in {
   imports = [
@@ -341,6 +378,15 @@ in {
     # fleet-network reachability (CoreDNS records, hypervisor drift).
     provisioning = meta.provisioning or "managed";
     pool = meta.pool or null;
+    # Declared NIC layout, for the CLI inventory and a future
+    # infra.networking driven by declared interfaces (PLAN.md Appendix A.2).
+    network_mode = meta.network_mode or "single-internal";
+    interfaces = lib.imap0 (i: n: {
+      name = if n.name != null then n.name else "eth${toString i}";
+      bridge = if n.vnet != null then n.vnet else n.bridge;
+      inherit (n) ipv4 gateway vlan mtu mac;
+      ipv6 = n.ipv6.method;
+    }) (meta.interfaces or []);
     ssh_groups = meta.ssh_groups or [ "platform-admins" ];
     sudo_groups = meta.sudo_groups or [];
   }) enabledCompute;

@@ -225,6 +225,112 @@
         "unprivileged": true,
         "vm_id": 9108
       },
+      "lxc-declared": {
+        "console": {
+          "type": "console"
+        },
+        "cpu": {
+          "cores": 2
+        },
+        "disk": {
+          "datastore_id": "local-lvm",
+          "size": 16
+        },
+        "features": {
+          "fuse": true,
+          "keyctl": true,
+          "nesting": true
+        },
+        "initialization": {
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "hostname": "lxc-declared",
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "192.0.2.111/22",
+                "gateway": "192.0.2.1"
+              },
+              "ipv6": {
+                "address": "2001:db8::111/64",
+                "gateway": "2001:db8::1"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "198.51.100.111/24"
+              },
+              "ipv6": {
+                "address": "auto"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "dhcp"
+              }
+            },
+            {
+              "ipv4": {
+                "address": "manual"
+              },
+              "ipv6": {
+                "address": "dhcp"
+              }
+            }
+          ]
+        },
+        "lifecycle": [
+          {
+            "ignore_changes": [
+              "operating_system"
+            ]
+          }
+        ],
+        "memory": {
+          "dedicated": 2048,
+          "swap": 2048
+        },
+        "mount_point": [],
+        "network_interface": [
+          {
+            "bridge": "vmbr1",
+            "mac_address": "BC:24:11:00:01:11",
+            "mtu": 1400,
+            "name": "eth0",
+            "vlan_id": 42
+          },
+          {
+            "bridge": "lab",
+            "firewall": true,
+            "name": "eth1",
+            "rate_limit": 100
+          },
+          {
+            "bridge": "vmbr0",
+            "name": "eth2"
+          },
+          {
+            "bridge": "vmbr2",
+            "name": "eth3"
+          }
+        ],
+        "node_name": "pve1",
+        "operating_system": {
+          "template_file_id": "nix-store:vztmpl/nixos-lxc-template-x86_64.tar.xz",
+          "type": "nixos"
+        },
+        "provider": "proxmox.golden",
+        "start_on_boot": true,
+        "started": true,
+        "tags": [],
+        "unprivileged": true,
+        "vm_id": 9111
+      },
       "lxc-devices": {
         "console": {
           "type": "console"

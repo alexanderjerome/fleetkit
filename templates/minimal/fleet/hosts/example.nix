@@ -18,6 +18,15 @@
     network_mode = "single-internal";
     features = { nesting = true; fuse = false; keyctl = false; };
     notes = "Example NixOS LXC — replace me.";
+    # Any NIC layout instead of the fixed single-internal shape:
+    # network_mode = "declared";
+    # interfaces = [
+    #   { bridge = "vmbr1"; ipv4 = "192.0.2.101/24"; gateway = "192.0.2.1"; }
+    #   { bridge = "vmbr0"; ipv4 = "dhcp"; vlan = 42; ipv6.method = "auto"; }
+    # ];
+    # Device passthrough (GPU / TUN / Coral) and PVE lifecycle flags:
+    # devices = [ { path = "/dev/dri/renderD128"; gid = 44; } { path = "/dev/net/tun"; } ];
+    # protection = true; startup = { order = 10; };
   };
 
   config.fleet.hostsRegistry.example = { helpers, ... }: {
