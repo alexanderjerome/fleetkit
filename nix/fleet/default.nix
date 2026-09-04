@@ -118,7 +118,7 @@ let
   #
   #    Cluster-wide kinds (pool, acl, realm, cluster-options) skip
   #    this — bpg doesn't take node_name for them.
-  nodeScopedResourceKinds = [ "bridge" "file" "download" "dns" ];
+  nodeScopedResourceKinds = [ "bridge" "file" "download" "dns" "linux-vlan" ];
 
   isProxmoxMultiNode = pi:
     let
@@ -141,8 +141,143 @@ let
         && (e.node or "") == "")
     (attrValues cfg.resources);
 
+  # 6. Prefix lengths, when set explicitly, must agree with the CIDRs
+  #    they default from (a stale override silently mis-addresses every
+  #    legacy-mode host).
+  prefixOf = cidr: lib.toInt (lib.last (lib.splitString "/" cidr));
+  prefixViolations =
+    lib.optional (cfg.network.internal_cidr != null
+                  && prefixOf cfg.network.internal_cidr != cfg.network.internal_prefix_len)
+      "fleet.network.internal_prefix_len=${toString cfg.network.internal_prefix_len} disagrees with internal_cidr=${cfg.network.internal_cidr}"
+    ++ lib.optional (cfg.network.lan_cidr != null
+                     && prefixOf cfg.network.lan_cidr != cfg.network.lan_prefix_len)
+      "fleet.network.lan_prefix_len=${toString cfg.network.lan_prefix_len} disagrees with lan_cidr=${cfg.network.lan_cidr}";
+
+  # 7. LXC-only knobs on a VM are a mistake, not a no-op.
+  nameOf = e: builtins.head (attrNames (filterAttrs (_: v: v == e) entriesByName));
+  lxcOnlyOnVm = filter
+    (e: e.kind == "vm"
+        && ((e.devices or []) != [] || (e.hook_script or null) != null || (e.lxc_extra_conf or []) != []
+            || (e.arch or "amd64") != "amd64"
+            || (e.features.mknod or false) || (e.features.mount or []) != []))
+    (attrValues enabledCompute);
+
+  # 7b. lxc_extra_conf needs a node to SSH to (explicit or the instance's
+  #     primary_node).
+  extraConfViolations = lib.concatMap (e:
+    let
+      parts = lib.strings.splitString "." e.provider_instance;
+      inst = if length parts >= 2 then builtins.elemAt parts 1 else "";
+      primary = ((cfg.providers.proxmox or {}).${inst} or { cluster.primary_node = ""; }).cluster.primary_node;
+    in lib.optional ((e.lxc_extra_conf or []) != [] && (e.node or "") == "" && primary == "")
+         "${nameOf e}: lxc_extra_conf needs `node` (or cluster.primary_node on ${e.provider_instance}) to reach the PVE node over SSH")
+    (attrValues provisionedCompute);
+
+  # 8. Device passthrough: unique host paths per guest; DNS override
+  #    non-empty when given.
+  deviceViolations = lib.concatMap
+    (e: let paths = map (d: d.path) (e.devices or []);
+        in lib.optional (lib.unique paths != paths) "${nameOf e}: duplicate device paths")
+    (attrValues enabledCompute);
+  dnsViolations = lib.concatMap
+    (e: lib.optional ((e.dns.servers or null) == []) "${nameOf e}: dns.servers = [] (use null to inherit fleet.network.dns_servers)")
+    (attrValues enabledCompute);
+
+  # 9. Declared network mode: interfaces present iff declared; per-NIC
+  #    consistency; internal_ip / ip must be one of the static
+  #    addresses (hostsJson, colmena targetHost and DNS use them).
+  hostPart = cidr: builtins.head (lib.splitString "/" cidr);
+  isCidr = v: v != null && v != "dhcp" && v != "manual";
+  nicViolations = lib.concatMap (e:
+    let
+      n = nameOf e;
+      ifs = e.interfaces or [];
+      declared = (e.network_mode or "") == "declared";
+      names = lib.imap0 (i: x: if x.name != null then x.name else "eth${toString i}") ifs;
+      statics = map hostPart (map (x: x.ipv4) (filter (x: isCidr x.ipv4) ifs));
+      v4gw = length (filter (x: x.gateway != null) ifs);
+      v6gw = length (filter (x: x.ipv6.gateway != null) ifs);
+    in
+      lib.optional (declared && ifs == []) "${n}: network_mode = \"declared\" needs at least one entry in `interfaces`"
+      ++ lib.optional (!declared && ifs != []) "${n}: `interfaces` is only read by network_mode = \"declared\" (current: ${e.network_mode})"
+      ++ lib.optional (lib.unique names != names) "${n}: duplicate interface names"
+      ++ lib.optional (e.kind == "container" && lib.any (x: builtins.match "eth[0-9]+" x == null) names) "${n}: LXC interface names must be ethN (the NixOS side assumes it)"
+      ++ lib.optional (v4gw > 1) "${n}: more than one interface carries an IPv4 gateway"
+      ++ lib.optional (v6gw > 1) "${n}: more than one interface carries an IPv6 gateway"
+      ++ lib.concatMap (x:
+           lib.optional (x.vnet != null && x.bridge != "vmbr0") "${n}: set either `bridge` or `vnet` on an interface, not both"
+           ++ lib.optional (x.gateway != null && !(isCidr x.ipv4)) "${n}: an IPv4 gateway needs a static ipv4 CIDR"
+           ++ lib.optional (x.ipv6.method == "static" && x.ipv6.address == null) "${n}: ipv6.method = static needs ipv6.address"
+           ++ lib.optional (x.ipv6.method != "static" && x.ipv6.address != null) "${n}: ipv6.address is only used with ipv6.method = static"
+           ++ lib.optional (x.ipv6.method != "static" && x.ipv6.gateway != null) "${n}: ipv6.gateway is only used with ipv6.method = static")
+         ifs
+      ++ lib.optional (declared && (e.internal_ip or "") != "" && !(elem e.internal_ip statics)) "${n}: internal_ip ${e.internal_ip} is not the address of any static interface"
+      ++ lib.optional (declared && (e.ip or "") != "" && !(elem e.ip statics)) "${n}: ip ${e.ip} is not the address of any static interface"
+  ) (attrValues enabledCompute);
+
+  # 11. SDN references: an interface's `vnet` and a subnet's `vnet` must
+  #     name an sdn-vnet resource on the same provider instance; a vnet's
+  #     `zone` an sdn-zone there; a vlan zone needs `bridge`.
+  declaredVnets = lib.unique (mapAttrsToList (n: r: "${r.provider_instance}/${r.vnet_id or n}")
+    (filterAttrs (_: r: r.kind == "sdn-vnet") cfg.resources));
+  declaredZones = lib.unique (mapAttrsToList (n: r: "${r.provider_instance}/${r.zone_id or n}")
+    (filterAttrs (_: r: r.kind == "sdn-zone") cfg.resources));
+  sdnViolations =
+    lib.concatMap (e: lib.concatMap (x:
+        lib.optional (x.vnet != null && !(elem "${e.provider_instance}/${x.vnet}" declaredVnets))
+          "${nameOf e}: interface vnet \"${x.vnet}\" has no sdn-vnet resource on ${e.provider_instance}")
+      (e.interfaces or [])) (attrValues provisionedCompute)
+    ++ mapAttrsToList (n: r: "${n}: sdn-vnet zone \"${r.zone}\" has no sdn-zone resource on ${r.provider_instance}")
+      (filterAttrs (n: r: r.kind == "sdn-vnet" && !(elem "${r.provider_instance}/${r.zone}" declaredZones)) cfg.resources)
+    ++ mapAttrsToList (n: r: "${n}: sdn-subnet vnet \"${r.vnet}\" has no sdn-vnet resource on ${r.provider_instance}")
+      (filterAttrs (n: r: r.kind == "sdn-subnet" && !(elem "${r.provider_instance}/${r.vnet}" declaredVnets)) cfg.resources)
+    ++ mapAttrsToList (n: r: "${n}: sdn-zone of zone_type vlan needs `bridge`")
+      (filterAttrs (n: r: r.kind == "sdn-zone" && (r.zone_type or "simple") == "vlan" && !(r ? bridge)) cfg.resources);
+
+  # 10. VM-only hardware settings on a container are a mistake.
+  vmOnlyOnLxc = filter
+    (e: e.kind == "container" && (
+      let v = e.vm; in
+      v.machine != null || v.bios != null || v.scsi_hardware != null || v.boot_order != null
+      || v.tablet != null || v.agent != null || v.cpu_type != "host" || !v.serial_console
+      || v.root_disk.interface != "virtio0" || v.root_disk.cache != null || v.root_disk.discard != null
+      || v.root_disk.iothread != null || v.root_disk.ssd != null
+      || !e.cloud_init.enable || e.cloud_init.datastore != null))
+    (attrValues enabledCompute);
+
   # ── Throw chain ────────────────────────────────────────────────
   validated =
+    throwIf (sdnViolations != [])
+      ''
+        FLEET SDN reference violations:
+          ${concatStringsSep "\n  " sdnViolations}
+      '' (
+    throwIf (vmOnlyOnLxc != [])
+      ''
+        FLEET VM-only options (vm.* / cloud_init.enable / cloud_init.datastore) set on container entries:
+          ${concatStringsSep ", " (map nameOf vmOnlyOnLxc)}
+      '' (
+    throwIf (nicViolations != [])
+      ''
+        FLEET interface violations:
+          ${concatStringsSep "\n  " nicViolations}
+      '' (
+    throwIf (lxcOnlyOnVm != [])
+      ''
+        FLEET LXC-only options set on VM entries (devices / hook_script / arch / features.mknod / features.mount):
+          ${concatStringsSep ", " (map nameOf lxcOnlyOnVm)}
+      '' (
+    throwIf ((deviceViolations ++ dnsViolations ++ extraConfViolations) != [])
+      ''
+        FLEET compute violations:
+          ${concatStringsSep "\n  " (deviceViolations ++ dnsViolations ++ extraConfViolations)}
+      '' (
+    throwIf (prefixViolations != [])
+      ''
+        FLEET network prefix-length violations:
+          ${concatStringsSep "\n  " prefixViolations}
+        Drop the explicit *_prefix_len (it derives from the CIDR) or fix the CIDR.
+      '' (
     throwIf (vmidViolations != [])
       ''
         FLEET vm_id uniqueness violations (scope: provider_instance + kind):
@@ -191,7 +326,7 @@ let
             ) instances)
           ) cfg.providers)}
       ''
-    true))));
+    true))))))))));
 
 in {
   imports = [
@@ -294,6 +429,15 @@ in {
     # fleet-network reachability (CoreDNS records, hypervisor drift).
     provisioning = meta.provisioning or "managed";
     pool = meta.pool or null;
+    # Declared NIC layout, for the CLI inventory and a future
+    # infra.networking driven by declared interfaces (PLAN.md Appendix A.2).
+    network_mode = meta.network_mode or "single-internal";
+    interfaces = lib.imap0 (i: n: {
+      name = if n.name != null then n.name else "eth${toString i}";
+      bridge = if n.vnet != null then n.vnet else n.bridge;
+      inherit (n) ipv4 gateway vlan mtu mac;
+      ipv6 = n.ipv6.method;
+    }) (meta.interfaces or []);
     ssh_groups = meta.ssh_groups or [ "platform-admins" ];
     sudo_groups = meta.sudo_groups or [];
   }) enabledCompute;

@@ -1,4 +1,4 @@
-{ lib, ... }:
+{ config, lib, ... }:
 
 # Schema for fleet.compute — OS-carrying resources (LXC containers + KVM VMs).
 # This file only declares the type and the `options.fleet.compute`
@@ -38,6 +38,9 @@
 # a provider_instance with destruction_policy = "strict" (validator enforces).
 
 let
+  defaultDatastore = config.fleet.settings.providers.proxmox.defaultDatastore;
+  defaultDatastoreText = lib.literalExpression "config.fleet.settings.providers.proxmox.defaultDatastore";
+
   # ── Shared option types — one ComputeResource shape ─────────────
   mountPointOpts = lib.types.submodule {
     options = {
@@ -52,6 +55,83 @@ let
       nesting = lib.mkOption { type = lib.types.bool; default = true; description = "Allow nested containers/namespaces inside the LXC (PVE `nesting` feature; needed for systemd-nspawn, Docker, nix sandboxed builds)."; };
       fuse = lib.mkOption { type = lib.types.bool; default = true; description = "Allow FUSE filesystem mounts inside the LXC (PVE `fuse` feature)."; };
       keyctl = lib.mkOption { type = lib.types.bool; default = true; description = "Allow the keyctl() syscall inside the LXC (PVE `keyctl` feature; needed by systemd-based guests)."; };
+      mknod = lib.mkOption { type = lib.types.bool; default = false; description = "Allow creating device nodes inside the LXC (PVE `mknod` feature). Emitted only when true — a non-root API token 403s on the field otherwise."; };
+      mount = lib.mkOption {
+        type = lib.types.listOf (lib.types.enum [ "nfs" "cifs" ]);
+        default = [];
+        example = [ "nfs" "cifs" ];
+        description = "Filesystem types the LXC may mount itself (PVE `mount` feature). PVE accepts nfs and cifs; FUSE is the separate `fuse` flag. Emitted only when non-empty.";
+      };
+    };
+  };
+  startupOpts = lib.types.submodule {
+    options = {
+      order = lib.mkOption { type = lib.types.nullOr lib.types.ints.unsigned; default = null; example = 10; description = "PVE start/shutdown order (lower starts first). null = PVE default (any order)."; };
+      up_delay = lib.mkOption { type = lib.types.nullOr lib.types.ints.unsigned; default = null; example = 30; description = "Seconds PVE waits after starting this guest before starting the next one."; };
+      down_delay = lib.mkOption { type = lib.types.nullOr lib.types.ints.unsigned; default = null; example = 30; description = "Seconds PVE waits after stopping this guest before stopping the next one."; };
+    };
+  };
+  dnsOpts = lib.types.submodule {
+    options = {
+      servers = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
+        example = [ "192.0.2.53" "1.1.1.1" ];
+        description = "Create-time resolvers written into this guest's PVE config. null = inherit fleet.network.dns_servers.";
+      };
+      domain = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "lab.example.internal";
+        description = "Create-time DNS search domain for this guest. null = inherit fleet.network.dns_domain; \"\" = explicitly none.";
+      };
+    };
+  };
+  cidr4 = lib.types.strMatching "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$";
+  ipv6Opts = lib.types.submodule {
+    options = {
+      method = lib.mkOption {
+        type = lib.types.enum [ "none" "auto" "dhcp" "static" ];
+        default = "none";
+        description = "IPv6 configuration for this NIC: none (nothing emitted — the legacy \"disable\" too), auto (SLAAC), dhcp, or static (`address` required).";
+      };
+      address = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "2001:db8::10/64"; description = "Static IPv6 address in CIDR notation (method = static)."; };
+      gateway = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "2001:db8::1"; description = "IPv6 default gateway (method = static only)."; };
+    };
+  };
+  interfaceOpts = lib.types.submodule {
+    options = {
+      name = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "eth0"; description = "In-guest interface name (LXC). null = eth<index>. Ignored for VMs (the guest kernel names NICs)."; };
+      bridge = lib.mkOption { type = lib.types.str; default = "vmbr0"; example = "vmbr1"; description = "PVE bridge this NIC attaches to (PVE's stock default bridge is vmbr0). Ignored when `vnet` is set."; };
+      vnet = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "lab"; description = "PVE SDN VNet id to attach to instead of a bridge (PVE writes it into the `bridge=` field). Declare the VNet as a `kind = \"sdn-vnet\"` resource on the same provider instance."; };
+      ipv4 = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either (lib.types.enum [ "dhcp" "manual" ]) cidr4);
+        default = "dhcp";
+        example = "192.0.2.10/24";
+        description = "IPv4 config: \"dhcp\", \"manual\" (PVE ip=manual, the guest configures itself), a CIDR (the prefix is explicit — no hidden /24), or null (no IPv4 block).";
+      };
+      gateway = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; example = "192.0.2.1"; description = "IPv4 default gateway (only with a static CIDR; at most one NIC per guest)."; };
+      ipv6 = lib.mkOption { type = ipv6Opts; default = {}; description = "IPv6 config ({ method, address, gateway })."; };
+      vlan = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 1 4094); default = null; example = 42; description = "802.1Q VLAN tag (PVE `tag=`)."; };
+      mtu = lib.mkOption {
+        type = lib.types.nullOr (lib.types.addCheck lib.types.int (m: m == 1 || (m >= 576 && m <= 65535)));
+        default = null;
+        example = 1400;
+        description = "NIC MTU (PVE `mtu=`): 576-65535, or 1 on a VM NIC to inherit the bridge MTU.";
+      };
+      mac = lib.mkOption { type = lib.types.nullOr (lib.types.strMatching "^([0-9A-F]{2}:){5}[0-9A-F]{2}$"); default = null; example = "BC:24:11:00:00:10"; description = "Pinned MAC address, uppercase colon-separated. null = PVE assigns one."; };
+      firewall = lib.mkOption { type = lib.types.bool; default = false; description = "Enable the PVE firewall on this NIC."; };
+      model = lib.mkOption { type = lib.types.enum [ "virtio" "e1000" "e1000e" "rtl8139" "vmxnet3" ]; default = "virtio"; description = "Virtual NIC model (VMs only; LXC NICs are veth)."; };
+      rate_limit_mbps = lib.mkOption { type = lib.types.nullOr lib.types.ints.positive; default = null; example = 100; description = "Egress rate limit in MB/s (PVE `rate=`)."; };
+    };
+  };
+  deviceOpts = lib.types.submodule {
+    options = {
+      path = lib.mkOption { type = lib.types.strMatching "^/dev/.+"; example = "/dev/dri/renderD128"; description = "Host device node passed through into the LXC (PVE `devN:` entry). Examples: /dev/net/tun, /dev/dri/renderD128, /dev/dri/card0, /dev/kfd, /dev/apex_0."; };
+      uid = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 0 65535); default = null; description = "Owner uid of the node inside the container. null = PVE default (root)."; };
+      gid = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 0 65535); default = null; example = 44; description = "Owner gid of the node inside the container (community scripts use 44 = video for /dev/dri). Unprivileged CTs need this to match the guest's group."; };
+      mode = lib.mkOption { type = lib.types.nullOr (lib.types.strMatching "^0[0-7]{3}$"); default = null; example = "0660"; description = "Access mode of the node inside the container. null = PVE default."; };
+      deny_write = lib.mkOption { type = lib.types.bool; default = false; description = "Expose the device read-only."; };
     };
   };
   importOpts = lib.types.submodule {
@@ -98,6 +178,17 @@ let
   };
   cloudInitOpts = lib.types.submodule {
     options = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Attach a cloud-init drive and emit the `initialization` block (hostname, DNS, ip_config, identity). false = no cloud-init at all — appliance images that configure themselves (the legacy CLOUD_INIT=no).";
+      };
+      datastore = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "local";
+        description = "PVE storage the cloud-init drive is allocated on. null = fleet.settings.providers.proxmox.defaultDatastore.";
+      };
       users = lib.mkOption {
         type = lib.types.listOf cloudInitUserOpts;
         default = [];
@@ -144,7 +235,38 @@ let
       size_gb = lib.mkOption { type = lib.types.int; description = "Disk size in GiB."; };
       mount_path = lib.mkOption { type = lib.types.str; description = "Mountpoint (e.g. /data)."; };
       filesystem = lib.mkOption { type = lib.types.str; default = "ext4"; description = "Filesystem to format with on first boot."; };
-      datastore_id = lib.mkOption { type = lib.types.str; default = "local-storage"; description = "PVE storage to allocate the disk on."; };
+      datastore_id = lib.mkOption { type = lib.types.str; default = defaultDatastore; defaultText = defaultDatastoreText; description = "PVE storage to allocate the disk on. Defaults to fleet.settings.providers.proxmox.defaultDatastore."; };
+    };
+  };
+
+  efiOpts = lib.types.submodule {
+    options = {
+      datastore = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; description = "PVE storage for the EFI vars disk. null = fleet.settings.providers.proxmox.defaultDatastore."; };
+      type = lib.mkOption { type = lib.types.enum [ "2m" "4m" ]; default = "4m"; description = "EFI vars disk size/type (PVE `efitype`; community default 4m)."; };
+      pre_enrolled_keys = lib.mkOption { type = lib.types.bool; default = false; description = "Pre-enrol the distribution Secure Boot keys into the EFI vars disk (community default: off)."; };
+    };
+  };
+  rootDiskOpts = lib.types.submodule {
+    options = {
+      interface = lib.mkOption { type = lib.types.str; default = "virtio0"; example = "scsi0"; description = "Bus/device of the root disk (community VMs use scsi0 with virtio-scsi-pci; fleetkit's NixOS images boot from virtio0)."; };
+      cache = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "none" "directsync" "writethrough" "writeback" "unsafe" ]); default = null; description = "Disk cache mode (PVE `cache=`). null = PVE default."; };
+      discard = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "on" "ignore" ]); default = null; description = "Pass discard/TRIM through to the storage (PVE `discard=`)."; };
+      iothread = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "Use a dedicated I/O thread (PVE `iothread=`)."; };
+      ssd = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "Present the disk as an SSD to the guest (PVE `ssd=`)."; };
+    };
+  };
+  vmOpts = lib.types.submodule {
+    options = {
+      machine = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "pc" "q35" ]); default = null; description = "QEMU machine type: pc (i440fx, community default) or q35. null = PVE default."; };
+      bios = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "seabios" "ovmf" ]); default = null; description = "Firmware. \"ovmf\" (UEFI) also emits an EFI vars disk from `efi`. null = PVE default (seabios)."; };
+      efi = lib.mkOption { type = efiOpts; default = {}; description = "EFI vars disk settings, used when bios = ovmf."; };
+      cpu_type = lib.mkOption { type = lib.types.str; default = "host"; example = "x86-64-v2-AES"; description = "QEMU CPU model (PVE `cpu:`). \"host\" (fleetkit default) passes the node's CPU through; community VMs default to kvm64 for migratability."; };
+      scsi_hardware = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "virtio-scsi-pci" "virtio-scsi-single" "lsi" "lsi53c810" "megasas" "pvscsi" ]); default = null; description = "SCSI controller model (PVE `scsihw`). null = PVE default."; };
+      root_disk = lib.mkOption { type = rootDiskOpts; default = {}; description = "Root disk attributes beyond size/datastore ({ interface, cache, discard, iothread, ssd })."; };
+      serial_console = lib.mkOption { type = lib.types.bool; default = true; description = "Attach a serial socket so `qm terminal <vmid>` reaches the guest console."; };
+      agent = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "QEMU guest agent enabled. null = fleetkit's rule (on for image-based and NixOS-template VMs)."; };
+      boot_order = lib.mkOption { type = lib.types.nullOr (lib.types.listOf lib.types.str); default = null; example = [ "scsi0" "net0" ]; description = "Explicit boot device order (PVE `boot: order=`). null = PVE default."; };
+      tablet = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "USB tablet device (community VMs pass `-tablet 0`). null = PVE default (on)."; };
     };
   };
 
@@ -334,7 +456,7 @@ let
       memory_mb = lib.mkOption { type = lib.types.int; default = 2048; description = "RAM in MiB. LXC containers pick up changes without a restart; VMs need a reboot."; };
       swap_mb = lib.mkOption { type = lib.types.int; default = 2048; description = "Swap in MiB (LXC only)."; };
       root_disk_gb = lib.mkOption { type = lib.types.int; default = 16; description = "Root disk size in GiB."; };
-      root_disk_datastore = lib.mkOption { type = lib.types.str; default = "local-storage"; description = "PVE storage the root disk is allocated on."; };
+      root_disk_datastore = lib.mkOption { type = lib.types.str; default = defaultDatastore; defaultText = defaultDatastoreText; description = "PVE storage the root disk is allocated on. Defaults to fleet.settings.providers.proxmox.defaultDatastore."; };
 
       mount_points = lib.mkOption {
         type = lib.types.listOf mountPointOpts;
@@ -347,13 +469,92 @@ let
       features = lib.mkOption {
         type = featuresOpts;
         default = {};
-        description = "PVE container feature flags ({ nesting, fuse, keyctl }, all default true; LXC only).";
+        description = "PVE container feature flags ({ nesting, fuse, keyctl } default true; { mknod, mount } default off; LXC only).";
+      };
+
+      # ── Lifecycle (both kinds) ──
+      protection = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "PVE guest protection flag (blocks destroy/remove in the PVE UI and API). Distinct from `protect`, which is the Terraform prevent_destroy lifecycle. Emitted only when true.";
+      };
+      onboot = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Start the guest when the PVE node boots (`onboot`).";
+      };
+      start_on_create = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Start the guest right after Terraform creates it. false = create stopped (appliance images that need a first manual step).";
+      };
+      startup = lib.mkOption {
+        type = lib.types.nullOr startupOpts;
+        default = null;
+        example = lib.literalExpression ''{ order = 10; up_delay = 30; }'';
+        description = "PVE startup ordering ({ order, up_delay, down_delay }). null = not managed.";
+      };
+      dns = lib.mkOption {
+        type = dnsOpts;
+        default = {};
+        description = "Per-guest create-time DNS override ({ servers, domain }); nulls inherit fleet.network.dns_servers / dns_domain. The declarative twin of the legacy var_ns / var_searchdomain.";
+      };
+
+      # ── LXC-only ──
+      arch = lib.mkOption {
+        type = lib.types.enum [ "amd64" "arm64" "armhf" "i386" ];
+        default = "amd64";
+        description = "Container CPU architecture (PVE `arch`, bpg cpu.architecture). Emitted only when not amd64. LXC only.";
+      };
+      devices = lib.mkOption {
+        type = lib.types.listOf deviceOpts;
+        default = [];
+        example = lib.literalExpression ''
+          [ { path = "/dev/net/tun"; }
+            { path = "/dev/dri/renderD128"; gid = 44; }
+            { path = "/dev/dri/card0"; gid = 44; } ]
+        '';
+        description = "Host device nodes passed through into the container (bpg device_passthrough → PVE devN entries): TUN for VPN software, /dev/dri + /dev/kfd + /dev/nvidia* for GPU transcoding, /dev/apex_0 for a Coral TPU. Replaces the lxc.conf edits the community scripts made. LXC only.";
+      };
+      lxc_extra_conf = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = lib.literalExpression ''
+          [ "lxc.cgroup2.devices.allow: c 188:* rwm"
+            "lxc.mount.entry: /dev/serial/by-id dev/serial/by-id none bind,optional,create=dir" ]
+        '';
+        description = ''
+          Raw lines appended to /etc/pve/lxc/<vmid>.conf inside a
+          "# BEGIN/END fleetkit lxc_extra_conf" marker block — the escape
+          hatch for what PVE's devN passthrough cannot express (hot-plug
+          USB cgroup wildcards, `optional` bind mounts, autodev hooks).
+          Applied by a terraform_data local-exec over root SSH to the
+          container's node (fleet.providers.proxmox.<inst>.cluster.node_addresses
+          maps node names to SSH hosts), re-run whenever the lines change,
+          rebooting the container if it is running. Emptying the list stops
+          managing the block but leaves it in place. LXC only.
+        '';
+      };
+      hook_script = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "local:snippets/post-create.sh";
+        description = "PVE hook script file id (a snippets file, e.g. a `kind = \"file\"` resource) run by PVE at the guest's lifecycle phases. LXC only.";
       };
 
       network_mode = lib.mkOption {
-        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" ];
+        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" "declared" ];
         default = "single-internal";
-        description = "Which NIC/bridge layout the emitter generates: single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both), or one of the custom/special-case layouts.";
+        description = "Which NIC/bridge layout the emitter generates. \"declared\" = the NICs come from `interfaces` (any bridge/VNet, DHCP or explicit CIDR, VLAN, MTU, MAC, IPv6) — the general form; single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both) and the custom/special-case layouts are the legacy fixed shapes kept for compatibility.";
+      };
+      interfaces = lib.mkOption {
+        type = lib.types.listOf interfaceOpts;
+        default = [];
+        example = lib.literalExpression ''
+          [ { bridge = "vmbr1"; ipv4 = "192.0.2.10/24"; gateway = "192.0.2.1"; vlan = 42; }
+            { bridge = "vmbr0"; ipv4 = "dhcp"; ipv6.method = "auto"; mac = "BC:24:11:00:00:10"; } ]
+        '';
+        description = "Ordered NIC list for `network_mode = \"declared\"`; index i becomes net<i> (LXC: eth<i> unless `name` says otherwise). Empty for every other mode (validator-enforced).";
       };
 
       privileged = lib.mkOption {
@@ -372,6 +573,13 @@ let
         type = lib.types.nullOr lib.types.str;
         default = null;
         description = "Pin the eth0 MAC address (uppercase colon-separated, e.g. \"BC:24:11:5B:EA:26\"). null = bpg-provider auto-assigns. Currently honoured by `lxc-router` mode; extend the network-mode emitters as needed for other modes.";
+      };
+
+      internal_bridge = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "vmbr2";
+        description = "Bridge the legacy `single-internal` mode attaches eth0 to. null = vmbr1, or vmbr0 when the provider instance is listed in fleet.settings.providers.proxmox.singleBridgeInstances. (Declared-mode hosts set the bridge per interface instead.)";
       };
 
       import = lib.mkOption {
@@ -394,7 +602,21 @@ let
       image = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = ''Explicit VM image. "file:<file_id>" imports a qcow2; "clone:<vmid>" clones a template.'';
+        example = "import:local:import/example-cloud-amd64.qcow2";
+        description = ''
+          Explicit guest image. VMs: "file:<file_id>" (a disk image file
+          resource), "clone:<vmid>" (full clone of a template VM), or
+          "import:<datastore>:import/<file>" (a raw/qcow2 uploaded to a
+          storage with the `import` content type, e.g. through a
+          `kind = "download"` resource — the appliance-image path; PVE 8.4+).
+          Containers: a vztmpl reference for a non-NixOS rootfs.
+        '';
+      };
+
+      vm = lib.mkOption {
+        type = vmOpts;
+        default = {};
+        description = "VM-only hardware settings ({ machine, bios, efi, cpu_type, scsi_hardware, root_disk, serial_console, agent, boot_order, tablet }). Ignored for containers (validator rejects non-defaults there).";
       };
 
       ansible_playbook = lib.mkOption {

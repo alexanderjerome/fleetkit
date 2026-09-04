@@ -1,0 +1,38 @@
+---
+# Purge old Proxmox kernels, keeping the running one and the newest
+# installed (port of community tools/pve/kernel-clean.sh). Never touches a
+# pinned kernel.
+
+- name: list installed proxmox kernels
+  ansible.builtin.shell: |
+    set -o pipefail
+    dpkg-query -W -f='${Package}\n' 'proxmox-kernel-*-pve' 'pve-kernel-*-pve' 2>/dev/null \
+      | grep -E '^(proxmox|pve)-kernel-[0-9]' | sort -V
+  args:
+    executable: /bin/bash
+  register: proxmox_kernels
+  changed_when: false
+  failed_when: false
+
+- name: compute removable kernels
+  ansible.builtin.set_fact:
+    proxmox_kernels_keep: >-
+      {{ [ (proxmox_kernels.stdout_lines | last | default('')),
+           (proxmox_kernels.stdout_lines | select('search', ansible_facts.kernel) | list | first | default('')),
+           ('proxmox-kernel-' ~ (fleet_pve_host_tweaks.kernelPin | default('')))
+         ] | reject('equalto', '') | list }}
+    proxmox_kernels_remove: >-
+      {{ proxmox_kernels.stdout_lines | difference(proxmox_kernels_keep) }}
+
+- name: purge old kernels
+  ansible.builtin.apt:
+    name: "{{ proxmox_kernels_remove }}"
+    state: absent
+    purge: true
+  when: proxmox_kernels_remove | length > 0
+  register: proxmox_kernel_purge
+
+- name: refresh boot entries
+  ansible.builtin.command: proxmox-boot-tool refresh
+  when: proxmox_kernel_purge is changed
+  changed_when: true

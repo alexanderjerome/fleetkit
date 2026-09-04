@@ -34,6 +34,23 @@ let
   fileEntries            = byKind.file or [];
   clusterOptionsEntries  = byKind."cluster-options" or [];
   metricsServerEntries   = byKind."metrics-server" or [];
+  sdnZoneEntries         = byKind."sdn-zone" or [];
+  sdnVnetEntries         = byKind."sdn-vnet" or [];
+  sdnSubnetEntries       = byKind."sdn-subnet" or [];
+  linuxVlanEntries       = byKind."linux-vlan" or [];
+  storageNfsEntries      = byKind."storage-nfs" or [];
+  storageDirEntries      = byKind."storage-dir" or [];
+
+  sdnEntries = sdnZoneEntries ++ sdnVnetEntries ++ sdnSubnetEntries;
+  instanceOf = e: builtins.elemAt (lib.strings.splitString "." e.provider_instance) 1;
+  sdnAddr = e:
+    if e.kind == "sdn-zone" then "proxmox_sdn_zone_${e.zone_type or "simple"}.${e._name}"
+    else if e.kind == "sdn-vnet" then "proxmox_sdn_vnet.${e._name}"
+    else "proxmox_sdn_subnet.${e._name}";
+  # One applier per provider instance that has SDN entries in this stack.
+  sdnAppliers = lib.mapAttrs (inst: es: helpers.mkSdnApplier inst (map sdnAddr es))
+    (lib.groupBy instanceOf sdnEntries);
+  zonesByType = lib.groupBy (e: e.zone_type or "simple") sdnZoneEntries;
 
 in {
   config = lib.mkIf (stackId != null && resourcesInStack != {}) (lib.mkMerge [
@@ -70,6 +87,30 @@ in {
       # cluster-options above. Use the new name from the start.
       resource.proxmox_metrics_server =
         emitKind metricsServerEntries helpers.mkMetricsServer;
+    })
+    (lib.mkIf (zonesByType ? simple) {
+      resource.proxmox_sdn_zone_simple = emitKind zonesByType.simple helpers.mkSdnZone;
+    })
+    (lib.mkIf (zonesByType ? vlan) {
+      resource.proxmox_sdn_zone_vlan = emitKind zonesByType.vlan helpers.mkSdnZone;
+    })
+    (lib.mkIf (sdnVnetEntries != []) {
+      resource.proxmox_sdn_vnet = emitKind sdnVnetEntries helpers.mkSdnVnet;
+    })
+    (lib.mkIf (sdnSubnetEntries != []) {
+      resource.proxmox_sdn_subnet = emitKind sdnSubnetEntries helpers.mkSdnSubnet;
+    })
+    (lib.mkIf (sdnEntries != []) {
+      resource.proxmox_sdn_applier = lib.mapAttrs' (inst: v: lib.nameValuePair "${inst}-sdn" v) sdnAppliers;
+    })
+    (lib.mkIf (linuxVlanEntries != []) {
+      resource.proxmox_virtual_environment_network_linux_vlan = emitKind linuxVlanEntries helpers.mkLinuxVlan;
+    })
+    (lib.mkIf (storageNfsEntries != []) {
+      resource.proxmox_storage_nfs = emitKind storageNfsEntries helpers.mkStorageNfs;
+    })
+    (lib.mkIf (storageDirEntries != []) {
+      resource.proxmox_storage_directory = emitKind storageDirEntries helpers.mkStorageDir;
     })
   ]);
 }

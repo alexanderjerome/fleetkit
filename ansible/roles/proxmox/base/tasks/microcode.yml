@@ -1,0 +1,23 @@
+---
+# CPU microcode for the node's vendor (port of community tools/pve/microcode.sh).
+# Debian ships both packages in non-free-firmware; the no-sub-repos task
+# already enables that component on the Debian sources.
+
+- name: detect CPU vendor
+  ansible.builtin.set_fact:
+    proxmox_microcode_pkg: >-
+      {{ 'intel-microcode' if 'GenuineIntel' in ansible_facts.processor | join(' ')
+         else ('amd64-microcode' if 'AuthenticAMD' in ansible_facts.processor | join(' ') else '') }}
+
+- name: install microcode package
+  ansible.builtin.apt:
+    name: "{{ proxmox_microcode_pkg }}"
+    state: present
+    update_cache: true
+  when: proxmox_microcode_pkg != ''
+  notify: proxmox microcode installed
+
+- name: report unknown vendor
+  ansible.builtin.debug:
+    msg: "no microcode package for this CPU vendor; skipping"
+  when: proxmox_microcode_pkg == ''

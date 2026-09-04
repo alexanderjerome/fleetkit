@@ -97,7 +97,7 @@ in
         # Single-NIC, LAN-only host (vmbr0). Static external IP + LAN
         # gateway via the LAN router.
         matchConfig.Name = "eth0";
-        addresses = [{ Address = "${netCfg.externalIp}/24"; }];
+        addresses = [{ Address = "${netCfg.externalIp}/${toString config.fleet.network.lan_prefix_len}"; }];
         routes = lib.optional (config.fleet.network.lan_gateway != null)
           { Gateway = config.fleet.network.lan_gateway; };
         # Fleet-DNS-only (no public resolver on this link) — see INFRA-107.
@@ -116,7 +116,7 @@ in
         # off netgate, Phase 3.c). Both pulled from fleet.network.* so
         # a future move only requires editing the manifest.
         matchConfig.Name = "eth0";
-        addresses = [{ Address = "${netCfg.internalIp}/24"; }];
+        addresses = [{ Address = "${netCfg.internalIp}/${toString config.fleet.network.internal_prefix_len}"; }];
         routes = lib.optional (config.fleet.network.gateway != null)
           { Gateway = config.fleet.network.gateway; };
         # Fleet-DNS-only (no public resolver on this link) — see INFRA-107.
@@ -152,7 +152,7 @@ in
 
     systemd.network.networks."10-eth1" = mkIf (!netCfg.singleInterface && netCfg.internalIp != "") ({
       matchConfig.Name = "eth1";
-      addresses = [{ Address = "${netCfg.internalIp}/24"; }];
+      addresses = [{ Address = "${netCfg.internalIp}/${toString config.fleet.network.internal_prefix_len}"; }];
       # Fleet-DNS-only on the internal link (no public resolver) — INFRA-107.
       networkConfig.DNS = config.fleet.network.internal_resolvers;
       networkConfig.Domains = lib.optional (config.fleet.network.dns_domain != null)

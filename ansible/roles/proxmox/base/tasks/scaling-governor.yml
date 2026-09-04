@@ -1,0 +1,28 @@
+---
+# CPU frequency scaling governor, applied at boot by a oneshot unit (port
+# of community tools/pve/scaling-governor.sh, which only set it once).
+
+- name: install cpu-governor service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/cpu-governor.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=set CPU frequency scaling governor ({{ fleet_pve_host_tweaks.scalingGovernor }})
+      After=multi-user.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo {{ fleet_pve_host_tweaks.scalingGovernor }} > "$g" || true; done'
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  register: proxmox_governor_unit
+
+- name: enable cpu-governor service
+  ansible.builtin.systemd:
+    name: cpu-governor.service
+    enabled: true
+    state: "{{ 'restarted' if proxmox_governor_unit.changed else 'started' }}"
+    daemon_reload: "{{ proxmox_governor_unit.changed }}"

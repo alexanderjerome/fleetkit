@@ -44,19 +44,22 @@ let
     [ svc.port ] ++ map (ep: ep.port) svc.extraPorts;
 
   # Build URL objects for the catalog.
+  # A fleet without an internal domain (minimum-viable principle) still
+  # registers services; its catalog URLs are then bare hostnames.
+  fqdn = base: if domain == null then base else "${base}.${domain}";
   urlsOf = _name: svc:
     let
       caddyHostname =
         if svc.caddy.hostname != null
-        then "${svc.caddy.hostname}.${domain}"
-        else "${hostName}.${domain}";
+        then fqdn svc.caddy.hostname
+        else fqdn hostName;
       path = if svc.caddy.path == "/" then "" else svc.caddy.path;
     in {
       internal = "http://${hostIp}:${toString svc.port}${path}";
       external =
         if svc.caddy.enable
         then "https://${caddyHostname}${path}"
-        else "http://${hostName}.${domain}:${toString svc.port}${path}";
+        else "http://${fqdn hostName}:${toString svc.port}${path}";
     };
 
   # Build ports array with ui flag for the catalog.

@@ -285,6 +285,24 @@ qm config $VMID | head -15
     console.print(f"[green]Template VMID {vmid} ready — use clone.vm_id: {vmid} in compute.yaml[/green]")
 
 
+# Lowest PVE release fleetkit's NixOS LXC path supports: PVE 9 ships
+# PVE::LXC::Setup::NixOS, which writes the guest's eth0.network from the
+# container's net0 ip=/gw= at create time (ostype = "nixos"), making a
+# fresh container reachable on its declared address with no bootstrap
+# step. Mirrors fleet.providers.proxmox.<inst>.minVersion (default 9.0).
+PVE_MIN_VERSION = (9, 0)
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    parts = []
+    for p in str(text).split("."):
+        digits = "".join(ch for ch in p if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts) or (0,)
+
+
 @pve.command("status")
 def status():
     """Show Proxmox host status and container overview (via REST API)."""
@@ -298,6 +316,20 @@ def status():
     except Exception as exc:
         console.print(f"[red]ERROR:[/red] {exc}")
         sys.exit(1)
+
+    try:
+        ver = api.version.get().get("version", "")
+    except Exception:  # noqa: BLE001 — version is informational
+        ver = ""
+    if ver:
+        if _version_tuple(ver) < PVE_MIN_VERSION:
+            console.print(
+                f"[red]PVE {ver} is below the supported floor "
+                f"{'.'.join(map(str, PVE_MIN_VERSION))}[/red] — NixOS containers "
+                "will not get their network configured at create time (ostype=nixos "
+                "needs the PVE 9 NixOS LXC setup plugin).")
+        else:
+            console.print(f"[green]PVE {ver}[/green]")
 
     from rich.table import Table
     table = Table(title="Containers", show_header=True, header_style="bold cyan")

@@ -1,0 +1,34 @@
+---
+# Disable NIC offloading on Intel e1000/e1000e adapters at boot — the known
+# "Detected Hardware Unit Hang" workaround (port of community
+# tools/pve/nic-offloading-fix.sh).
+
+- name: install ethtool
+  ansible.builtin.apt:
+    name: ethtool
+    state: present
+
+- name: install nic-offloading-fix service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nic-offloading-fix.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=disable offloading on Intel e1000/e1000e NICs
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'for d in /sys/class/net/*; do n=$(basename "$d"); drv=$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)" 2>/dev/null); case "$drv" in e1000|e1000e) ethtool -K "$n" gso off gro off tso off tx off rx off rxvlan off txvlan off sg off || true;; esac; done'
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  register: proxmox_offload_unit
+
+- name: enable nic-offloading-fix service
+  ansible.builtin.systemd:
+    name: nic-offloading-fix.service
+    enabled: true
+    state: "{{ 'restarted' if proxmox_offload_unit.changed else 'started' }}"
+    daemon_reload: "{{ proxmox_offload_unit.changed }}"

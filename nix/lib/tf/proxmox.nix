@@ -8,10 +8,20 @@
 
 let
   net = config.fleet.network;
+  pveSettings = config.fleet.settings.providers.proxmox;
+  # Storage for everything a compute entry does not name explicitly.
+  ds = pveSettings.defaultDatastore;
 
   # Gateways are optional (null ⇒ isolated/minimal fleet): omit the
   # gateway attr from ip_config instead of emitting null.
   optGw = gw: lib.optionalAttrs (gw != null) { gateway = gw; };
+
+  # Bare address → CIDR with the fleet-wide prefix length
+  # (fleet.network.internal_prefix_len / lan_prefix_len, default 24 —
+  # what used to be a literal "/24" here).
+  ipv4Cidr = ip: len: "${ip}/${toString len}";
+  internalCidr = ip: ipv4Cidr ip net.internal_prefix_len;
+  lanCidr = ip: ipv4Cidr ip net.lan_prefix_len;
 
   # Note renderers (markdown → bpg `description`).
   notes = import ../notes/proxmox { inherit lib; };
@@ -51,12 +61,54 @@ let
   # fresh LXCs and VMs boot resolvable even when the fleet's own DNS
   # isn't up yet. mkVm has its own initialization block and adds
   # DNS there directly; LXCs (mkContainer) rely entirely on mkNetwork.
+  # Create-time DNS block: per-guest override (meta.dns) falling back to
+  # the cluster-wide fleet.network values. dns_domain is optional (null ⇒
+  # no internal zone): omit the attr so the provider writes no search
+  # domain into the guest; "" on the per-guest override means the same.
+  dnsFor = meta:
+    let
+      d = meta.dns or { servers = null; domain = null; };
+      servers = if d.servers != null then d.servers else net.dns_servers;
+      domain = if d.domain != null then d.domain else net.dns_domain;
+    in { inherit servers; }
+       // lib.optionalAttrs (domain != null && domain != "") { inherit domain; };
+
+  # Lifecycle attributes shared by containers and VMs; each emitted only
+  # when it differs from what the emitter produced before the option
+  # existed (protection off, startup unmanaged).
+  lifecycleAttrs = meta:
+    lib.optionalAttrs (meta.protection or false) { protection = true; }
+    // lib.optionalAttrs ((meta.startup or null) != null) {
+      startup = lib.filterAttrs (_: v: v != null) {
+        inherit (meta.startup) order up_delay down_delay;
+      };
+    };
+
+  # ── Declared-mode NIC helpers ──
+  ifName = i: n: if n.name != null then n.name else "eth${toString i}";
+  bridgeFor = n: if n.vnet != null then n.vnet else n.bridge;
+  nicCommon = n:
+    lib.optionalAttrs (n.vlan != null) { vlan_id = n.vlan; }
+    // lib.optionalAttrs (n.mtu != null) { mtu = n.mtu; }
+    // lib.optionalAttrs (n.mac != null) { mac_address = n.mac; }
+    // lib.optionalAttrs (n.rate_limit_mbps != null) { rate_limit = n.rate_limit_mbps; };
+  # One ip_config entry per NIC (positional, like PVE's netN). A NIC with
+  # no IPv4 and no IPv6 yields {} — verify on a dev node that the pinned
+  # provider accepts an empty block; otherwise use ipv4 = "manual".
+  ipConfigFor = n:
+    lib.optionalAttrs (n.ipv4 != null) { ipv4 = { address = n.ipv4; } // optGw n.gateway; }
+    // lib.optionalAttrs (n.ipv6.method != "none") {
+      ipv6 = { address = if n.ipv6.method == "static" then n.ipv6.address else n.ipv6.method; }
+        // optGw n.ipv6.gateway;
+    };
+  declaredLxcNics = meta: lib.imap0 (i: n:
+    { name = ifName i n; bridge = bridgeFor n; }
+    // nicCommon n
+    // lib.optionalAttrs n.firewall { firewall = true; }) meta.interfaces;
+
   mkNetwork = meta: let
     mode = meta.network_mode;
-    # dns_domain is optional (null ⇒ no internal zone): omit the attr so
-    # the provider writes no search domain into the guest.
-    dnsConfig = { servers = net.dns_servers; }
-      // lib.optionalAttrs (net.dns_domain != null) { domain = net.dns_domain; };
+    dnsConfig = dnsFor meta;
     # Per-host override for bpg-provider's `host_managed` attribute. Splice
     # into every network_interface entry when set. null = leave bpg default.
     hmAttrs = if (meta ? host_managed && meta.host_managed != null)
@@ -90,7 +142,7 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [{
-          ipv4 = { address = "${meta.internal_ip}/24"; } // optGw net.gateway;
+          ipv4 = { address = internalCidr meta.internal_ip; } // optGw net.gateway;
         }];
       };
     }
@@ -106,7 +158,7 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [{
-          ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway;
+          ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway;
         }];
       };
     }
@@ -118,7 +170,7 @@ let
       initialization = {
         hostname = meta._name;
         dns = dnsConfig;
-        ip_config = [{ ipv4 = { address = "${meta.internal_ip}/24"; }; }];
+        ip_config = [{ ipv4 = { address = internalCidr meta.internal_ip; }; }];
       };
     }
     else if mode == "custom-netgate" then {
@@ -130,9 +182,9 @@ let
         hostname = "netgate";
         dns = dnsConfig;
         ip_config = [
-          { ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway; }
+          { ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway; }
           # netgate IS the vmbr1 gateway — no upstream here.
-          { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+          { ipv4 = { address = internalCidr meta.internal_ip; }; }
         ];
       };
     }
@@ -142,7 +194,7 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [{
-          ipv4 = { address = "${meta.internal_ip}/24"; } // optGw net.gateway;
+          ipv4 = { address = internalCidr meta.internal_ip; } // optGw net.gateway;
           ipv6 = { address = "auto"; };
         }];
       };
@@ -165,9 +217,19 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [
-          { ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway; }
-          { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+          { ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway; }
+          { ipv4 = { address = internalCidr meta.internal_ip; }; }
         ];
+      };
+    }
+    # The general form: every NIC declared explicitly (bridge/VNet, DHCP
+    # or CIDR with its own prefix, VLAN, MTU, MAC, IPv6, firewall).
+    else if mode == "declared" then {
+      network_interface = map nic (declaredLxcNics meta);
+      initialization = {
+        hostname = meta._name;
+        dns = dnsConfig;
+        ip_config = map ipConfigFor meta.interfaces;
       };
     }
     else throw "mkNetwork: unsupported network_mode ${mode} for ${meta._name}";
@@ -202,7 +264,7 @@ let
   # — replaces the old scp-to-every-node bootstrap. (The 2026-06-06
   # attempt failed because nix-builder was then a PVE LXC that couldn't
   # run kernel nfsd; it's since moved to a tier-0 XCP-ng VM.)
-  nixosLxcTemplate = "nix-store:vztmpl/nixos-lxc-template-x86_64.tar.xz";
+  nixosLxcTemplate = "${pveSettings.lxcTemplateDatastore}:vztmpl/nixos-lxc-template-x86_64.tar.xz";
   # The Debian *VM* path (debian13DiskId / debianCloudImage qcow2) was removed
   # (INFRA-137): the fleet has no KVM Debian guests — every non-NixOS guest is a
   # Debian LXC, which uses a vztmpl rootfs tarball (not a VM qcow2). That
@@ -308,23 +370,38 @@ in rec {
       provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
       node_name = resolveNode meta;
       vm_id = meta.vm_id;
-      started = true;
-      start_on_boot = true;
+      started = meta.start_on_create;
+      start_on_boot = meta.onboot;
       unprivileged = !meta.privileged;
       tags = meta.tags;
 
-      cpu = { cores = meta.cpu_cores; };
+      cpu = { cores = meta.cpu_cores; }
+        // lib.optionalAttrs (meta.arch != "amd64") { architecture = meta.arch; };
       memory = { dedicated = meta.memory_mb; swap = meta.swap_mb; };
       disk = { datastore_id = meta.root_disk_datastore; size = meta.root_disk_gb; };
-      # Only emit fuse/keyctl when true: a non-root PVE API token may set
-      # `nesting` but 403s on ANY fuse/keyctl value (even false), so omitting
-      # them when off lets the IaC path create token-managed CTs (INFRA-88).
+      # Only emit fuse/keyctl/mknod/mount when on: a non-root PVE API token
+      # may set `nesting` but 403s on ANY fuse/keyctl value (even false), so
+      # omitting them when off lets the IaC path create token-managed CTs
+      # (INFRA-88).
       features = {
         nesting = meta.features.nesting;
       } // (lib.optionalAttrs meta.features.fuse { fuse = true; })
-        // (lib.optionalAttrs meta.features.keyctl { keyctl = true; });
+        // (lib.optionalAttrs meta.features.keyctl { keyctl = true; })
+        // (lib.optionalAttrs meta.features.mknod { mknod = true; })
+        // (lib.optionalAttrs (meta.features.mount != []) { mount = meta.features.mount; });
       console = { type = "console"; };
     } // mountConfig // sourceConfig
+      // (lifecycleAttrs meta)
+      // (lib.optionalAttrs (meta.devices != []) {
+        device_passthrough = map (d:
+          { path = d.path; }
+          // lib.optionalAttrs (d.uid != null) { uid = d.uid; }
+          // lib.optionalAttrs (d.gid != null) { gid = d.gid; }
+          // lib.optionalAttrs (d.mode != null) { mode = d.mode; }
+          // lib.optionalAttrs d.deny_write { deny_write = true; }
+        ) meta.devices;
+      })
+      // (lib.optionalAttrs (meta.hook_script != null) { hook_script_file_id = meta.hook_script; })
       // (lib.optionalAttrs (meta.pool != null) { pool_id = meta.pool; })
       // (let d = computeDescription meta; in lib.optionalAttrs (d != null) { description = d; })
       // (mkNetwork (meta // { _name = name; })) // (mkLifecycle lifecycleMeta)
@@ -336,8 +413,54 @@ in rec {
             (initConfig.initialization or {});
           in lib.optionalAttrs hasCustomImage { initialization = merged; });
 
+  # ── Raw lxc.conf lines (escape hatch) ─────────────────────────
+  # terraform_data + local-exec over the same root-SSH channel the bpg
+  # provider itself uses (nix/tf/providers/proxmox: ssh.username = root).
+  # The block is rewritten idempotently between markers; the container is
+  # rebooted only if running. `nix shell`, never `nix-shell -p` (flakes-only
+  # operator hosts have no channels NIX_PATH).
+  mkLxcExtraConf = name: meta:
+    let
+      inst = builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1;
+      instCfg = config.fleet.providers.proxmox.${inst} or null;
+      node = resolveNode meta;
+      nodeAddr = if instCfg != null then (instCfg.cluster.node_addresses.${node} or node) else node;
+      block = lib.concatStringsSep "\n" meta.lxc_extra_conf;
+      vmid = toString meta.vm_id;
+      script = ''
+        set -e
+        conf=/etc/pve/lxc/${vmid}.conf
+        b='# BEGIN fleetkit lxc_extra_conf'
+        e='# END fleetkit lxc_extra_conf'
+        tmp=$(mktemp)
+        awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$conf" > "$tmp"
+        { cat "$tmp"; echo "$b"; cat <<'FLEETKIT_BLOCK'
+        ${block}
+        FLEETKIT_BLOCK
+        echo "$e"; } > "$conf"
+        rm -f "$tmp"
+        if pct status ${vmid} | grep -q running; then pct reboot ${vmid}; fi
+      '';
+    in {
+      triggers_replace = [
+        "\${proxmox_virtual_environment_container.${name}.id}"
+        (builtins.hashString "sha256" block)
+      ];
+      provisioner = [{
+        local-exec = {
+          command = "nix shell nixpkgs#openssh --command ssh -o BatchMode=yes root@${nodeAddr} 'bash -s' <<'FLEETKIT_EOF'\n${script}FLEETKIT_EOF";
+        };
+      }];
+    };
+
   # ── KVM/QEMU VM emitter ───────────────────────────────────────
   mkVm = name: meta:
+    # cloud_init.enable = false: no cloud-init drive, no initialization
+    # block at all (self-configuring appliance images). The key is removed
+    # rather than nulled — a null nested block is not valid Terraform JSON.
+    lib.removeAttrs (mkVmAttrs name meta) (lib.optional (!meta.cloud_init.enable) "initialization");
+
+  mkVmAttrs = name: meta:
     let
       # ── New-style explicit image dispatch ──
       # If meta.image is set, parse it as either "file:<file_id>" or
@@ -348,10 +471,22 @@ in rec {
       imageKind = if imageStr == null then null
                   else if lib.hasPrefix "file:" imageStr then "file"
                   else if lib.hasPrefix "clone:" imageStr then "clone"
-                  else throw "mkVm(${name}): image must be \"file:...\" or \"clone:<vmid>\", got ${imageStr}";
+                  else if lib.hasPrefix "import:" imageStr then "import"
+                  else throw "mkVm(${name}): image must be \"file:...\", \"clone:<vmid>\" or \"import:<datastore>:import/<file>\", got ${imageStr}";
       imageFileId = if imageKind == "file"
                     then lib.removePrefix "file:" imageStr
                     else null;
+      # "import:<datastore>:import/<file>" → disk.import_from (PVE 8.4+
+      # import content type; the appliance-image path).
+      imageImportFrom = if imageKind == "import"
+                        then lib.removePrefix "import:" imageStr
+                        else null;
+      vmCfg = meta.vm;
+      rootDiskExtra =
+        lib.optionalAttrs (vmCfg.root_disk.cache != null) { cache = vmCfg.root_disk.cache; }
+        // lib.optionalAttrs (vmCfg.root_disk.discard != null) { discard = vmCfg.root_disk.discard; }
+        // lib.optionalAttrs (vmCfg.root_disk.iothread != null) { iothread = vmCfg.root_disk.iothread; }
+        // lib.optionalAttrs (vmCfg.root_disk.ssd != null) { ssd = vmCfg.root_disk.ssd; };
       imageCloneVmId = if imageKind == "clone"
                        then lib.toInt (lib.removePrefix "clone:" imageStr)
                        else null;
@@ -367,6 +502,7 @@ in rec {
 
       # Whether to use the new image-dispatch path or the legacy one.
       newStyle = imageStr != null;
+      declared = meta.network_mode == "declared";
 
       # Data disks → virtio1, virtio2, ... in declaration order.
       dataDiskEntries = lib.imap0 (i: dd: {
@@ -379,7 +515,7 @@ in rec {
       # declare data_disks. Drops out once dev-nithin migrates.
       legacyDevDataDisk =
         lib.optional (isDev && !newStyle && (meta.data_disks or []) == []) {
-          interface = "virtio1"; datastore_id = "local-storage"; size = 128;
+          interface = "virtio1"; datastore_id = ds; size = 128;
         };
 
       nicDefaults = {
@@ -400,9 +536,9 @@ in rec {
       vm_id = meta.vm_id;
       name = name;
       tags = meta.tags;
-      started = true;
+      started = meta.start_on_create;
 
-      cpu = { cores = meta.cpu_cores; type = "host"; };
+      cpu = { cores = meta.cpu_cores; type = vmCfg.cpu_type; };
       memory = { dedicated = meta.memory_mb; };
       operating_system = { type = "l26"; };
 
@@ -410,18 +546,26 @@ in rec {
         if newStyle then (
           # New-style: dispatch on imageKind. For "clone:<vmid>" the
           # root disk is just a sized entry (clone block provides the
-          # source); for "file:<file_id>" we set file_id.
+          # source); "file:<file_id>" sets file_id; "import:…" sets
+          # import_from.
           {
-            interface = "virtio0"; datastore_id = "local-storage";
+            interface = vmCfg.root_disk.interface; datastore_id = ds;
             size = meta.root_disk_gb;
           } // lib.optionalAttrs (imageKind == "file") { file_id = imageFileId; }
+            // lib.optionalAttrs (imageKind == "import") { import_from = imageImportFrom; }
+            // rootDiskExtra
         )
         else if fromNixosTemplate then {
-          interface = "virtio0"; datastore_id = "local-storage"; size = meta.root_disk_gb;
-        } else throw "mkVm(${name}): the legacy Debian-VM disk path was removed (INFRA-137). The fleet has no KVM Debian guests — use a Debian LXC (kind=container + image), or set an explicit `image = \"file:...\"`/`\"clone:...\"`."
+          interface = vmCfg.root_disk.interface; datastore_id = ds; size = meta.root_disk_gb;
+        } // rootDiskExtra
+        else throw "mkVm(${name}): the legacy Debian-VM disk path was removed (INFRA-137). The fleet has no KVM Debian guests — use a Debian LXC (kind=container + image), or set an explicit `image = \"file:...\"`/`\"clone:...\"`."
       )] ++ dataDiskEntries ++ legacyDevDataDisk;
 
-      network_device = [
+      network_device =
+        if declared then map (n:
+          nicDefaults // { bridge = bridgeFor n; model = n.model; firewall = n.firewall; }
+          // nicCommon n) meta.interfaces
+        else [
         (nicDefaults // {
           bridge = "vmbr0";
         } // lib.optionalAttrs isNetgate {
@@ -435,11 +579,19 @@ in rec {
       ];
 
       initialization = {
-        datastore_id = "local-storage";
+        datastore_id = if meta.cloud_init.datastore != null then meta.cloud_init.datastore else ds;
         type = "nocloud";
-        dns = { servers = net.dns_servers; }
-          // lib.optionalAttrs (net.dns_domain != null) { domain = net.dns_domain; };
+        dns = dnsFor meta;
       } // (
+        # Declared NICs: ip_config mirrors `interfaces` one-to-one; the
+        # cloud-init identity follows the image kind (a file: image gets
+        # the per-VM snippet, everything else the sysadmin key).
+        if declared then
+          (if newStyle && imageKind == "file"
+           then { user_data_file_id = "local:snippets/${name}-user-data.yaml"; }
+           else { user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; }; })
+          // { ip_config = map ipConfigFor meta.interfaces; }
+        else
         # New-style: a custom user-data snippet is generated by
         # nix/fleet/resources.nix's renderCloudInitSnippet, uploaded as
         # local:snippets/<name>-user-data.yaml. NixOS clone VMs in
@@ -450,21 +602,21 @@ in rec {
             user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
             ip_config = [
               { ipv4 = { address = "dhcp"; }; }
-              { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+              { ipv4 = { address = internalCidr meta.internal_ip; }; }
             ];
           } else {
             user_data_file_id = "local:snippets/${name}-user-data.yaml";
             ip_config = [
               { ipv4 = { address = "dhcp"; }; }
-              { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+              { ipv4 = { address = internalCidr meta.internal_ip; }; }
             ];
           }
         )
         else if isNetgate then {
           user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
           ip_config = [
-            { ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if isHeadscaleRouter then {
@@ -494,7 +646,7 @@ in rec {
                 address = config.fleet.settings.network.staticWanCidrs.${name} or
                   (throw "mkVm(${name}): legacy headscale-router VMs need a WAN-side CIDR in fleet.settings.network.staticWanCidrs.\"${name}\"");
               } // optGw net.lan_gateway; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if fromNixosTemplate then {
@@ -504,14 +656,14 @@ in rec {
           user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
           ip_config = [
             { ipv4 = { address = "dhcp"; }; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if isDept then {
           user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
           ip_config = [
             { ipv4 = { address = "dhcp"; }; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if isDev then {
@@ -523,7 +675,7 @@ in rec {
           user_data_file_id = "local:snippets/${name}-user-data.yaml";
           ip_config = [
             { ipv4 = { address = "dhcp"; }; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else throw "mkVm: unknown VM class for ${name}"
@@ -532,20 +684,35 @@ in rec {
       # Agent enabled when the OS has qemu-guest-agent installed.
       # New-style: always on (prepared images bake it in; clone-from-template
       # VMs ship NixOS which also runs it). Legacy: only dev/nixos paths had it.
-      agent = { enabled = newStyle || isDev || fromNixosTemplate; };
-
-      # Always attach a serial socket so `qm terminal <vmid>` can reach the
-      # guest console — essential for debugging stuck boots on non-NixOS VMs
-      # (firstboot prompts, cloud-init failures, kernel panics). Cheap to keep
-      # on every VM; pattern is the community-scripts default.
-      serial_device = [{ device = "socket"; }];
+      # vm.agent overrides the rule either way.
+      agent = { enabled = if vmCfg.agent != null then vmCfg.agent else (newStyle || isDev || fromNixosTemplate); };
     }
+    # A serial socket so `qm terminal <vmid>` can reach the guest console —
+    # essential for debugging stuck boots on non-NixOS VMs (firstboot
+    # prompts, cloud-init failures, kernel panics). On by default; pattern is
+    # the community-scripts default.
+    // lib.optionalAttrs vmCfg.serial_console { serial_device = [{ device = "socket"; }]; }
+    // lib.optionalAttrs (vmCfg.machine != null) { machine = vmCfg.machine; }
+    // lib.optionalAttrs (vmCfg.bios != null) { bios = vmCfg.bios; }
+    // lib.optionalAttrs (vmCfg.bios == "ovmf") {
+      efi_disk = {
+        datastore_id = if vmCfg.efi.datastore != null then vmCfg.efi.datastore else ds;
+        file_format = "raw";
+        type = vmCfg.efi.type;
+        pre_enrolled_keys = vmCfg.efi.pre_enrolled_keys;
+      };
+    }
+    // lib.optionalAttrs (vmCfg.scsi_hardware != null) { scsi_hardware = vmCfg.scsi_hardware; }
+    // lib.optionalAttrs (vmCfg.boot_order != null) { boot_order = vmCfg.boot_order; }
+    // lib.optionalAttrs (vmCfg.tablet != null) { tablet_device = vmCfg.tablet; }
+    // (lifecycleAttrs meta)
+    // lib.optionalAttrs (!meta.onboot) { on_boot = false; }
     // lib.optionalAttrs (newStyle && imageKind == "clone") {
-      clone = { vm_id = imageCloneVmId; datastore_id = "local-storage"; full = true; }
+      clone = { vm_id = imageCloneVmId; datastore_id = ds; full = true; }
         // lib.optionalAttrs (meta ? cloneFrom && false) {};  # placeholder for cross-host clones
     }
     // lib.optionalAttrs (!newStyle && fromNixosTemplate) {
-      clone = { vm_id = 9000; datastore_id = "local-storage"; full = true; };
+      clone = { vm_id = 9000; datastore_id = ds; full = true; };
     }
     // lib.optionalAttrs (meta.pool != null) { pool_id = meta.pool; }
     // (let d = computeDescription meta; in lib.optionalAttrs (d != null) { description = d; })
@@ -662,6 +829,90 @@ in rec {
     opentelemetry_proto = meta.opentelemetry_proto or "http";
     opentelemetry_path = meta.opentelemetry_path or "/v1/metrics";
   } // lib.optionalAttrs (meta ? disable) { disable = meta.disable; }
+    // (mkLifecycle meta);
+
+  # ── PVE SDN (zone → vnet → subnet) ─────────────────────────────
+  # bpg names: proxmox_sdn_zone_{simple,vlan}, proxmox_sdn_vnet,
+  # proxmox_sdn_subnet, proxmox_sdn_applier (the older
+  # proxmox_virtual_environment_sdn_* names are deprecated, same story as
+  # cluster-options). Confirm them against the pinned provider with
+  # `tofu providers schema -json` on first use.
+  mkSdnZone = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.zone_id or name;
+  } // lib.optionalAttrs (meta ? nodes) { nodes = meta.nodes; }
+    // lib.optionalAttrs (meta ? mtu) { mtu = meta.mtu; }
+    // lib.optionalAttrs (meta ? dns_zone) { dns_zone = meta.dns_zone; }
+    // lib.optionalAttrs (meta ? ipam) { ipam = meta.ipam; }
+    // lib.optionalAttrs ((meta.zone_type or "simple") == "vlan") { bridge = meta.bridge; }
+    // (mkLifecycle meta);
+
+  mkSdnVnet = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.vnet_id or name;
+    zone = meta.zone;
+  } // lib.optionalAttrs (meta ? tag) { tag = meta.tag; }
+    // lib.optionalAttrs (meta ? vlan_aware) { vlan_aware = meta.vlan_aware; }
+    // lib.optionalAttrs (meta ? alias) { alias = meta.alias; }
+    // lib.optionalAttrs (meta ? isolate_ports) { isolate_ports = meta.isolate_ports; }
+    // (mkLifecycle meta);
+
+  mkSdnSubnet = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    vnet = meta.vnet;
+    cidr = meta.cidr;
+  } // lib.optionalAttrs (meta ? gateway) { gateway = meta.gateway; }
+    // lib.optionalAttrs (meta ? snat) { snat = meta.snat; }
+    // lib.optionalAttrs (meta ? dhcp_range) { dhcp_range = meta.dhcp_range; }
+    // lib.optionalAttrs (meta ? dhcp_dns_server) { dhcp_dns_server = meta.dhcp_dns_server; }
+    // (mkLifecycle meta);
+
+  # One applier per (stack, provider instance): SDN changes are staged in
+  # PVE until applied; this resource applies them and re-runs whenever any
+  # SDN resource of the stack changes.
+  mkSdnApplier = instance: sdnAddrs: {
+    provider = "proxmox.${instance}";
+    depends_on = sdnAddrs;
+    lifecycle = [{ replace_triggered_by = sdnAddrs; }];
+  };
+
+  # Node VLAN interface (e.g. vmbr0.42) — replaces the manual
+  # /etc/network/interfaces edit the community bridge picker assumed.
+  mkLinuxVlan = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    node_name = resolveNode meta;
+    name = meta.interface_name or name;
+  } // lib.optionalAttrs (meta ? interface) { interface = meta.interface; }
+    // lib.optionalAttrs (meta ? vlan) { vlan = meta.vlan; }
+    // lib.optionalAttrs (meta ? address) { address = meta.address; }
+    // lib.optionalAttrs (meta ? gateway) { gateway = meta.gateway; }
+    // lib.optionalAttrs (meta ? mtu) { mtu = meta.mtu; }
+    // lib.optionalAttrs (meta ? comment) { comment = meta.comment; }
+    // (mkLifecycle meta);
+
+  # Cluster storages — the declarative twin of storage-share-helper.sh
+  # (NFS) and of adding a directory storage in the UI. `content` lists PVE
+  # content types (images, rootdir, vztmpl, iso, snippets, backup, import).
+  mkStorageNfs = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.storage_id or name;
+    server = meta.server;
+    export = meta.export;
+    content = meta.content or [ "images" "rootdir" ];
+  } // lib.optionalAttrs (meta ? nodes) { nodes = meta.nodes; }
+    // lib.optionalAttrs (meta ? options) { options = meta.options; }
+    // lib.optionalAttrs (meta ? shared) { shared = meta.shared; }
+    // lib.optionalAttrs (meta ? disable) { disable = meta.disable; }
+    // (mkLifecycle meta);
+
+  mkStorageDir = name: meta: {
+    provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
+    id = meta.storage_id or name;
+    path = meta.path;
+    content = meta.content or [ "images" "rootdir" "vztmpl" "iso" "snippets" "backup" ];
+  } // lib.optionalAttrs (meta ? nodes) { nodes = meta.nodes; }
+    // lib.optionalAttrs (meta ? shared) { shared = meta.shared; }
+    // lib.optionalAttrs (meta ? disable) { disable = meta.disable; }
     // (mkLifecycle meta);
 
   # Datacenter-level options (singleton per cluster). The only field

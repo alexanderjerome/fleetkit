@@ -6,6 +6,11 @@
 # Consumed by the sssd NixOS module, Colmena, the dev-VM cloud-init
 # renderer, and every host's systemd-networkd config (via core.nix).
 
+let
+  prefixOf = cidr: fallback:
+    if cidr == null then fallback
+    else lib.toInt (lib.last (lib.splitString "/" cidr));
+in
 {
   options.fleet.network = {
     ldap = {
@@ -159,6 +164,28 @@
       default = null;
       example = "198.51.100.0/24";
       description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
+    };
+
+    # Prefix lengths appended to the BARE `internal_ip` / `ip` of the
+    # legacy network modes (and to the NixOS-side link config). They used
+    # to be a hard-coded /24 in nix/lib/tf/proxmox.nix and fleet-member.nix.
+    # Derived from the CIDRs when those are set, else 24 — identical
+    # output for fleets that never set them. `network_mode = "declared"`
+    # carries an explicit prefix per interface and ignores these.
+    internal_prefix_len = lib.mkOption {
+      type = lib.types.ints.between 0 32;
+      default = prefixOf config.fleet.network.internal_cidr 24;
+      defaultText = lib.literalExpression "prefix length of fleet.network.internal_cidr, else 24";
+      example = 22;
+      description = "Prefix length for the internal bridge (vmbr1) network: appended to every bare `internal_ip` by the legacy network modes and by the fleet-member networkd config. Default: taken from `internal_cidr`, else 24.";
+    };
+
+    lan_prefix_len = lib.mkOption {
+      type = lib.types.ints.between 0 32;
+      default = prefixOf config.fleet.network.lan_cidr 24;
+      defaultText = lib.literalExpression "prefix length of fleet.network.lan_cidr, else 24";
+      example = 24;
+      description = "Prefix length for the LAN bridge (vmbr0) network: appended to every bare `ip` by the single-external / dual / router / netgate paths and by the fleet-member networkd config. Default: taken from `lan_cidr`, else 24.";
     };
 
     ntp_server = lib.mkOption {

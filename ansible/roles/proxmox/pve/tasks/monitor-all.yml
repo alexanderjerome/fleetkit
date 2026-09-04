@@ -1,0 +1,66 @@
+---
+# ping-instances: restart guests that stop answering pings (port of
+# community tools/pve/monitor-all.sh). Guests tagged `mon-exclude` are
+# skipped, as upstream.
+
+- name: install ping-instances script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/ping-instances
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      # Every 5 minutes: for every running guest with a routable IPv4,
+      # ping it; restart it after three consecutive failures.
+      set -e
+      state=/run/ping-instances.state
+      touch "$state"
+      while true; do
+        for line in $(pct list | awk 'NR>1 && $2=="running"{print "ct:"$1}') $(qm list | awk 'NR>1 && $3=="running"{print "vm:"$1}'); do
+          kind=${line%%:*}; id=${line#*:}
+          if [ "$kind" = ct ]; then
+            pct config "$id" | grep -q 'tags:.*mon-exclude' && continue
+            ip=$(pct exec "$id" -- ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1 || true)
+          else
+            qm config "$id" | grep -q 'tags:.*mon-exclude' && continue
+            ip=$(qm guest cmd "$id" network-get-interfaces 2>/dev/null | jq -r '[.[]|select(.name!="lo")|."ip-addresses"[]?|select(."ip-address-type"=="ipv4")|."ip-address"][0] // empty' || true)
+          fi
+          [ -n "$ip" ] || continue
+          if ping -c1 -W2 "$ip" >/dev/null 2>&1; then
+            sed -i "/^$line /d" "$state"
+          else
+            n=$(awk -v k="$line" '$1==k{print $2}' "$state"); n=$((${n:-0}+1))
+            sed -i "/^$line /d" "$state"; echo "$line $n" >> "$state"
+            if [ "$n" -ge 3 ]; then
+              logger -t ping-instances "restarting $kind $id ($ip) after $n failed pings"
+              if [ "$kind" = ct ]; then pct reboot "$id" || true; else qm reboot "$id" || true; fi
+              sed -i "/^$line /d" "$state"
+            fi
+          fi
+        done
+        sleep 300
+      done
+
+- name: install ping-instances service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ping-instances.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=restart guests that stop answering pings
+      After=pve-guests.service
+
+      [Service]
+      ExecStart=/usr/local/sbin/ping-instances
+      Restart=always
+      RestartSec=30
+
+      [Install]
+      WantedBy=multi-user.target
+  register: pve_ping_unit
+
+- name: enable ping-instances service
+  ansible.builtin.systemd:
+    name: ping-instances.service
+    enabled: true
+    state: "{{ 'restarted' if pve_ping_unit.changed else 'started' }}"
+    daemon_reload: "{{ pve_ping_unit.changed }}"

@@ -2,3 +2,7 @@
 - name: daemon-reload
   ansible.builtin.systemd:
     daemon_reload: true
+
+- name: proxmox microcode installed
+  ansible.builtin.debug:
+    msg: "microcode installed — takes effect after the next reboot"
