@@ -374,6 +374,13 @@ let
         description = "Pin the eth0 MAC address (uppercase colon-separated, e.g. \"BC:24:11:5B:EA:26\"). null = bpg-provider auto-assigns. Currently honoured by `lxc-router` mode; extend the network-mode emitters as needed for other modes.";
       };
 
+      internal_bridge = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "vmbr2";
+        description = "Bridge the legacy `single-internal` mode attaches eth0 to. null = vmbr1, or vmbr0 when the provider instance is listed in fleet.settings.providers.proxmox.singleBridgeInstances. (Declared-mode hosts set the bridge per interface instead.)";
+      };
+
       import = lib.mkOption {
         type = importOpts;
         default = {};

@@ -13,6 +13,13 @@ let
   # gateway attr from ip_config instead of emitting null.
   optGw = gw: lib.optionalAttrs (gw != null) { gateway = gw; };
 
+  # Bare address → CIDR with the fleet-wide prefix length
+  # (fleet.network.internal_prefix_len / lan_prefix_len, default 24 —
+  # what used to be a literal "/24" here).
+  ipv4Cidr = ip: len: "${ip}/${toString len}";
+  internalCidr = ip: ipv4Cidr ip net.internal_prefix_len;
+  lanCidr = ip: ipv4Cidr ip net.lan_prefix_len;
+
   # Note renderers (markdown → bpg `description`).
   notes = import ../notes/proxmox { inherit lib; };
 
@@ -90,7 +97,7 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [{
-          ipv4 = { address = "${meta.internal_ip}/24"; } // optGw net.gateway;
+          ipv4 = { address = internalCidr meta.internal_ip; } // optGw net.gateway;
         }];
       };
     }
@@ -106,7 +113,7 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [{
-          ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway;
+          ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway;
         }];
       };
     }
@@ -118,7 +125,7 @@ let
       initialization = {
         hostname = meta._name;
         dns = dnsConfig;
-        ip_config = [{ ipv4 = { address = "${meta.internal_ip}/24"; }; }];
+        ip_config = [{ ipv4 = { address = internalCidr meta.internal_ip; }; }];
       };
     }
     else if mode == "custom-netgate" then {
@@ -130,9 +137,9 @@ let
         hostname = "netgate";
         dns = dnsConfig;
         ip_config = [
-          { ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway; }
+          { ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway; }
           # netgate IS the vmbr1 gateway — no upstream here.
-          { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+          { ipv4 = { address = internalCidr meta.internal_ip; }; }
         ];
       };
     }
@@ -142,7 +149,7 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [{
-          ipv4 = { address = "${meta.internal_ip}/24"; } // optGw net.gateway;
+          ipv4 = { address = internalCidr meta.internal_ip; } // optGw net.gateway;
           ipv6 = { address = "auto"; };
         }];
       };
@@ -165,8 +172,8 @@ let
         hostname = meta._name;
         dns = dnsConfig;
         ip_config = [
-          { ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway; }
-          { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+          { ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway; }
+          { ipv4 = { address = internalCidr meta.internal_ip; }; }
         ];
       };
     }
@@ -450,21 +457,21 @@ in rec {
             user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
             ip_config = [
               { ipv4 = { address = "dhcp"; }; }
-              { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+              { ipv4 = { address = internalCidr meta.internal_ip; }; }
             ];
           } else {
             user_data_file_id = "local:snippets/${name}-user-data.yaml";
             ip_config = [
               { ipv4 = { address = "dhcp"; }; }
-              { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+              { ipv4 = { address = internalCidr meta.internal_ip; }; }
             ];
           }
         )
         else if isNetgate then {
           user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
           ip_config = [
-            { ipv4 = { address = "${meta.ip}/24"; } // optGw net.lan_gateway; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = lanCidr meta.ip; } // optGw net.lan_gateway; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if isHeadscaleRouter then {
@@ -494,7 +501,7 @@ in rec {
                 address = config.fleet.settings.network.staticWanCidrs.${name} or
                   (throw "mkVm(${name}): legacy headscale-router VMs need a WAN-side CIDR in fleet.settings.network.staticWanCidrs.\"${name}\"");
               } // optGw net.lan_gateway; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if fromNixosTemplate then {
@@ -504,14 +511,14 @@ in rec {
           user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
           ip_config = [
             { ipv4 = { address = "dhcp"; }; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if isDept then {
           user_account = { username = "root"; keys = [ net.sysadmin_ssh_key ]; };
           ip_config = [
             { ipv4 = { address = "dhcp"; }; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else if isDev then {
@@ -523,7 +530,7 @@ in rec {
           user_data_file_id = "local:snippets/${name}-user-data.yaml";
           ip_config = [
             { ipv4 = { address = "dhcp"; }; }
-            { ipv4 = { address = "${meta.internal_ip}/24"; }; }
+            { ipv4 = { address = internalCidr meta.internal_ip; }; }
           ];
         }
         else throw "mkVm: unknown VM class for ${name}"

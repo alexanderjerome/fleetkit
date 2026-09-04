@@ -141,8 +141,26 @@ let
         && (e.node or "") == "")
     (attrValues cfg.resources);
 
+  # 6. Prefix lengths, when set explicitly, must agree with the CIDRs
+  #    they default from (a stale override silently mis-addresses every
+  #    legacy-mode host).
+  prefixOf = cidr: lib.toInt (lib.last (lib.splitString "/" cidr));
+  prefixViolations =
+    lib.optional (cfg.network.internal_cidr != null
+                  && prefixOf cfg.network.internal_cidr != cfg.network.internal_prefix_len)
+      "fleet.network.internal_prefix_len=${toString cfg.network.internal_prefix_len} disagrees with internal_cidr=${cfg.network.internal_cidr}"
+    ++ lib.optional (cfg.network.lan_cidr != null
+                     && prefixOf cfg.network.lan_cidr != cfg.network.lan_prefix_len)
+      "fleet.network.lan_prefix_len=${toString cfg.network.lan_prefix_len} disagrees with lan_cidr=${cfg.network.lan_cidr}";
+
   # ── Throw chain ────────────────────────────────────────────────
   validated =
+    throwIf (prefixViolations != [])
+      ''
+        FLEET network prefix-length violations:
+          ${concatStringsSep "\n  " prefixViolations}
+        Drop the explicit *_prefix_len (it derives from the CIDR) or fix the CIDR.
+      '' (
     throwIf (vmidViolations != [])
       ''
         FLEET vm_id uniqueness violations (scope: provider_instance + kind):
@@ -191,7 +209,7 @@ let
             ) instances)
           ) cfg.providers)}
       ''
-    true))));
+    true)))));
 
 in {
   imports = [
