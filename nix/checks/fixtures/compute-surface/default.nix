@@ -98,6 +98,15 @@ in
         { bridge = "vmbr1"; ipv4 = "192.0.2.207/24"; gateway = "192.0.2.1"; vlan = 7; mac = "BC:24:11:00:02:07"; }
         { bridge = "vmbr0"; ipv4 = "dhcp"; model = "e1000"; firewall = true; mtu = 1; }
       ]; };
+    vm-hardware = vm { vm_id = 9208; internal_ip = "192.0.2.208"; image = "import:local:import/example-cloud-amd64.qcow2";
+      network_mode = "declared"; interfaces = [ { bridge = "vmbr1"; ipv4 = "192.0.2.208/24"; gateway = "192.0.2.1"; } ];
+      vm = { machine = "q35"; bios = "ovmf"; efi = { datastore = "local"; pre_enrolled_keys = true; }; cpu_type = "x86-64-v2-AES";
+             scsi_hardware = "virtio-scsi-pci"; root_disk = { interface = "scsi0"; cache = "writeback"; discard = "on"; iothread = true; ssd = true; };
+             serial_console = false; agent = false; boot_order = [ "scsi0" ]; tablet = false; };
+      cloud_init.datastore = "local"; };
+    vm-nocloudinit = vm { vm_id = 9209; internal_ip = "192.0.2.209"; image = "import:local:import/appliance.raw";
+      network_mode = "declared"; interfaces = [ { bridge = "vmbr0"; ipv4 = "dhcp"; } ];
+      cloud_init.enable = false; vm = { bios = "ovmf"; }; };
     vm-file = vm { vm_id = 9205; internal_ip = "192.0.2.205"; image = "file:local:iso/example-cloud-amd64.qcow2";
       cloud_init = { users = [ { name = "operator"; ssh_keys = [ "ssh-ed25519 AAAAGOLDEN operator@example.test" ]; } ]; runcmd = [ "echo golden" ]; }; };
   };

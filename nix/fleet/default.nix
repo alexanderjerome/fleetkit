@@ -204,8 +204,24 @@ let
       ++ lib.optional (declared && (e.ip or "") != "" && !(elem e.ip statics)) "${n}: ip ${e.ip} is not the address of any static interface"
   ) (attrValues enabledCompute);
 
+  # 10. VM-only hardware settings on a container are a mistake.
+  vmOnlyOnLxc = filter
+    (e: e.kind == "container" && (
+      let v = e.vm; in
+      v.machine != null || v.bios != null || v.scsi_hardware != null || v.boot_order != null
+      || v.tablet != null || v.agent != null || v.cpu_type != "host" || !v.serial_console
+      || v.root_disk.interface != "virtio0" || v.root_disk.cache != null || v.root_disk.discard != null
+      || v.root_disk.iothread != null || v.root_disk.ssd != null
+      || !e.cloud_init.enable || e.cloud_init.datastore != null))
+    (attrValues enabledCompute);
+
   # ── Throw chain ────────────────────────────────────────────────
   validated =
+    throwIf (vmOnlyOnLxc != [])
+      ''
+        FLEET VM-only options (vm.* / cloud_init.enable / cloud_init.datastore) set on container entries:
+          ${concatStringsSep ", " (map nameOf vmOnlyOnLxc)}
+      '' (
     throwIf (nicViolations != [])
       ''
         FLEET interface violations:
@@ -275,7 +291,7 @@ let
             ) instances)
           ) cfg.providers)}
       ''
-    true))))))));
+    true)))))))));
 
 in {
   imports = [

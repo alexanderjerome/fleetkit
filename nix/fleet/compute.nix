@@ -1,4 +1,4 @@
-{ lib, ... }:
+{ config, lib, ... }:
 
 # Schema for fleet.compute — OS-carrying resources (LXC containers + KVM VMs).
 # This file only declares the type and the `options.fleet.compute`
@@ -38,6 +38,9 @@
 # a provider_instance with destruction_policy = "strict" (validator enforces).
 
 let
+  defaultDatastore = config.fleet.settings.providers.proxmox.defaultDatastore;
+  defaultDatastoreText = lib.literalExpression "config.fleet.settings.providers.proxmox.defaultDatastore";
+
   # ── Shared option types — one ComputeResource shape ─────────────
   mountPointOpts = lib.types.submodule {
     options = {
@@ -175,6 +178,17 @@ let
   };
   cloudInitOpts = lib.types.submodule {
     options = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Attach a cloud-init drive and emit the `initialization` block (hostname, DNS, ip_config, identity). false = no cloud-init at all — appliance images that configure themselves (the legacy CLOUD_INIT=no).";
+      };
+      datastore = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "local";
+        description = "PVE storage the cloud-init drive is allocated on. null = fleet.settings.providers.proxmox.defaultDatastore.";
+      };
       users = lib.mkOption {
         type = lib.types.listOf cloudInitUserOpts;
         default = [];
@@ -221,7 +235,38 @@ let
       size_gb = lib.mkOption { type = lib.types.int; description = "Disk size in GiB."; };
       mount_path = lib.mkOption { type = lib.types.str; description = "Mountpoint (e.g. /data)."; };
       filesystem = lib.mkOption { type = lib.types.str; default = "ext4"; description = "Filesystem to format with on first boot."; };
-      datastore_id = lib.mkOption { type = lib.types.str; default = "local-storage"; description = "PVE storage to allocate the disk on."; };
+      datastore_id = lib.mkOption { type = lib.types.str; default = defaultDatastore; defaultText = defaultDatastoreText; description = "PVE storage to allocate the disk on. Defaults to fleet.settings.providers.proxmox.defaultDatastore."; };
+    };
+  };
+
+  efiOpts = lib.types.submodule {
+    options = {
+      datastore = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; description = "PVE storage for the EFI vars disk. null = fleet.settings.providers.proxmox.defaultDatastore."; };
+      type = lib.mkOption { type = lib.types.enum [ "2m" "4m" ]; default = "4m"; description = "EFI vars disk size/type (PVE `efitype`; community default 4m)."; };
+      pre_enrolled_keys = lib.mkOption { type = lib.types.bool; default = false; description = "Pre-enrol the distribution Secure Boot keys into the EFI vars disk (community default: off)."; };
+    };
+  };
+  rootDiskOpts = lib.types.submodule {
+    options = {
+      interface = lib.mkOption { type = lib.types.str; default = "virtio0"; example = "scsi0"; description = "Bus/device of the root disk (community VMs use scsi0 with virtio-scsi-pci; fleetkit's NixOS images boot from virtio0)."; };
+      cache = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "none" "directsync" "writethrough" "writeback" "unsafe" ]); default = null; description = "Disk cache mode (PVE `cache=`). null = PVE default."; };
+      discard = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "on" "ignore" ]); default = null; description = "Pass discard/TRIM through to the storage (PVE `discard=`)."; };
+      iothread = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "Use a dedicated I/O thread (PVE `iothread=`)."; };
+      ssd = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "Present the disk as an SSD to the guest (PVE `ssd=`)."; };
+    };
+  };
+  vmOpts = lib.types.submodule {
+    options = {
+      machine = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "pc" "q35" ]); default = null; description = "QEMU machine type: pc (i440fx, community default) or q35. null = PVE default."; };
+      bios = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "seabios" "ovmf" ]); default = null; description = "Firmware. \"ovmf\" (UEFI) also emits an EFI vars disk from `efi`. null = PVE default (seabios)."; };
+      efi = lib.mkOption { type = efiOpts; default = {}; description = "EFI vars disk settings, used when bios = ovmf."; };
+      cpu_type = lib.mkOption { type = lib.types.str; default = "host"; example = "x86-64-v2-AES"; description = "QEMU CPU model (PVE `cpu:`). \"host\" (fleetkit default) passes the node's CPU through; community VMs default to kvm64 for migratability."; };
+      scsi_hardware = lib.mkOption { type = lib.types.nullOr (lib.types.enum [ "virtio-scsi-pci" "virtio-scsi-single" "lsi" "lsi53c810" "megasas" "pvscsi" ]); default = null; description = "SCSI controller model (PVE `scsihw`). null = PVE default."; };
+      root_disk = lib.mkOption { type = rootDiskOpts; default = {}; description = "Root disk attributes beyond size/datastore ({ interface, cache, discard, iothread, ssd })."; };
+      serial_console = lib.mkOption { type = lib.types.bool; default = true; description = "Attach a serial socket so `qm terminal <vmid>` reaches the guest console."; };
+      agent = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "QEMU guest agent enabled. null = fleetkit's rule (on for image-based and NixOS-template VMs)."; };
+      boot_order = lib.mkOption { type = lib.types.nullOr (lib.types.listOf lib.types.str); default = null; example = [ "scsi0" "net0" ]; description = "Explicit boot device order (PVE `boot: order=`). null = PVE default."; };
+      tablet = lib.mkOption { type = lib.types.nullOr lib.types.bool; default = null; description = "USB tablet device (community VMs pass `-tablet 0`). null = PVE default (on)."; };
     };
   };
 
@@ -411,7 +456,7 @@ let
       memory_mb = lib.mkOption { type = lib.types.int; default = 2048; description = "RAM in MiB. LXC containers pick up changes without a restart; VMs need a reboot."; };
       swap_mb = lib.mkOption { type = lib.types.int; default = 2048; description = "Swap in MiB (LXC only)."; };
       root_disk_gb = lib.mkOption { type = lib.types.int; default = 16; description = "Root disk size in GiB."; };
-      root_disk_datastore = lib.mkOption { type = lib.types.str; default = "local-storage"; description = "PVE storage the root disk is allocated on."; };
+      root_disk_datastore = lib.mkOption { type = lib.types.str; default = defaultDatastore; defaultText = defaultDatastoreText; description = "PVE storage the root disk is allocated on. Defaults to fleet.settings.providers.proxmox.defaultDatastore."; };
 
       mount_points = lib.mkOption {
         type = lib.types.listOf mountPointOpts;
@@ -538,7 +583,21 @@ let
       image = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = ''Explicit VM image. "file:<file_id>" imports a qcow2; "clone:<vmid>" clones a template.'';
+        example = "import:local:import/example-cloud-amd64.qcow2";
+        description = ''
+          Explicit guest image. VMs: "file:<file_id>" (a disk image file
+          resource), "clone:<vmid>" (full clone of a template VM), or
+          "import:<datastore>:import/<file>" (a raw/qcow2 uploaded to a
+          storage with the `import` content type, e.g. through a
+          `kind = "download"` resource — the appliance-image path; PVE 8.4+).
+          Containers: a vztmpl reference for a non-NixOS rootfs.
+        '';
+      };
+
+      vm = lib.mkOption {
+        type = vmOpts;
+        default = {};
+        description = "VM-only hardware settings ({ machine, bios, efi, cpu_type, scsi_hardware, root_disk, serial_console, agent, boot_order, tablet }). Ignored for containers (validator rejects non-defaults there).";
       };
 
       ansible_playbook = lib.mkOption {

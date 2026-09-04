@@ -183,6 +183,33 @@
 
     providers = {
       proxmox = {
+        defaultDatastore = lib.mkOption {
+          type = lib.types.str;
+          default = "local-storage";
+          example = "local-lvm";
+          description = ''
+            PVE storage used wherever a compute entry does not name one:
+            VM root/EFI/data disks, the cloud-init drive, clone targets,
+            and the default of fleet.compute.<name>.root_disk_datastore.
+            LEGACY DEFAULT "local-storage" is kept so existing fleets
+            render unchanged; set it explicitly (PVE's stock thin pool is
+            "local-lvm") — the default flips to "local-lvm" in the next
+            major release.
+          '';
+        };
+        lxcTemplateDatastore = lib.mkOption {
+          type = lib.types.str;
+          default = "nix-store";
+          example = "local";
+          description = ''
+            PVE storage (content type vztmpl) that holds the NixOS LXC
+            template nixos-lxc-template-x86_64.tar.xz every NixOS container
+            is created from. LEGACY DEFAULT "nix-store" (a cluster-wide NFS
+            SR registered by the ansible proxmox/pve nfs-storage task); a
+            single-node fleet uploads the template to "local" instead via a
+            `kind = "file"` resource with source = "nixos-lxc-image".
+          '';
+        };
         singleBridgeInstances = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];

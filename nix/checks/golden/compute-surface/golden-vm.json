@@ -498,6 +498,92 @@
         "tags": [],
         "vm_id": 9205
       },
+      "vm-hardware": {
+        "agent": {
+          "enabled": false
+        },
+        "bios": "ovmf",
+        "boot_order": [
+          "scsi0"
+        ],
+        "cpu": {
+          "cores": 2,
+          "type": "x86-64-v2-AES"
+        },
+        "disk": [
+          {
+            "cache": "writeback",
+            "datastore_id": "local-storage",
+            "discard": "on",
+            "import_from": "local:import/example-cloud-amd64.qcow2",
+            "interface": "scsi0",
+            "iothread": true,
+            "size": 16,
+            "ssd": true
+          }
+        ],
+        "efi_disk": {
+          "datastore_id": "local",
+          "file_format": "raw",
+          "pre_enrolled_keys": true,
+          "type": "4m"
+        },
+        "initialization": {
+          "datastore_id": "local",
+          "dns": {
+            "domain": "golden.test",
+            "servers": [
+              "192.0.2.53",
+              "1.1.1.1"
+            ]
+          },
+          "ip_config": [
+            {
+              "ipv4": {
+                "address": "192.0.2.208/24",
+                "gateway": "192.0.2.1"
+              }
+            }
+          ],
+          "type": "nocloud",
+          "user_account": {
+            "keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOLDENGOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN sysadmin@example.test"
+            ],
+            "username": "root"
+          }
+        },
+        "machine": "q35",
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "vm-hardware",
+        "network_device": [
+          {
+            "bridge": "vmbr1",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "scsi_hardware": "virtio-scsi-pci",
+        "started": true,
+        "tablet_device": false,
+        "tags": [],
+        "vm_id": 9208
+      },
       "vm-lifecycle": {
         "agent": {
           "enabled": true
@@ -692,6 +778,62 @@
         "started": true,
         "tags": [],
         "vm_id": 9203
+      },
+      "vm-nocloudinit": {
+        "agent": {
+          "enabled": true
+        },
+        "bios": "ovmf",
+        "cpu": {
+          "cores": 2,
+          "type": "host"
+        },
+        "disk": [
+          {
+            "datastore_id": "local-storage",
+            "import_from": "local:import/appliance.raw",
+            "interface": "virtio0",
+            "size": 16
+          }
+        ],
+        "efi_disk": {
+          "datastore_id": "local-storage",
+          "file_format": "raw",
+          "pre_enrolled_keys": false,
+          "type": "4m"
+        },
+        "memory": {
+          "dedicated": 2048
+        },
+        "name": "vm-nocloudinit",
+        "network_device": [
+          {
+            "bridge": "vmbr0",
+            "disconnected": false,
+            "enabled": true,
+            "firewall": false,
+            "mac_address": "",
+            "model": "virtio",
+            "mtu": 0,
+            "queues": 0,
+            "rate_limit": 0,
+            "trunks": "",
+            "vlan_id": 0
+          }
+        ],
+        "node_name": "pve2",
+        "operating_system": {
+          "type": "l26"
+        },
+        "provider": "proxmox.golden",
+        "serial_device": [
+          {
+            "device": "socket"
+          }
+        ],
+        "started": true,
+        "tags": [],
+        "vm_id": 9209
       }
     }
   },
