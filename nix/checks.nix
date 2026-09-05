@@ -105,7 +105,8 @@ in {
     # port a green check sat over broken code because nothing FORCED the
     # value — these are all strict env attrs, so instantiating this
     # derivation forces every one.
-    exampleV2ToplevelDrv = example.nixosConfigurations.example-v2.config.system.build.toplevel.drvPath;
+    exampleV2ToplevelDrv = builtins.unsafeDiscardOutputDependency
+      example.nixosConfigurations.example-v2.config.system.build.toplevel.drvPath;
     v2Lift = builtins.toJSON {
       kind = example.fleetEval.compute.example-v2.kind;                      # "container"
       node = example.fleetEval.compute.example-v2.node;                      # "pve1"
