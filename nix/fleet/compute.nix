@@ -20,7 +20,7 @@
 #   cpu_cores, memory_mb, swap_mb, root_disk_gb, root_disk_datastore
 #   mount_points        list of { datastore, path, size, backup } (LXC only)
 #   features            { nesting, fuse, keyctl } (LXC only)
-#   network_mode        "single-internal" | "single-external" | "dual" | "custom-netgate" | "custom-vm" | "lxc-router" | "internal-plus-lan-mac"
+#   network_mode        "single-internal" | "single-external" | "dual" | "custom-netgate" | "custom-btc-testnet" | "custom-vm" | "lxc-router" | "internal-plus-lan-mac"
 #   protect             bool — emits lifecycle.prevent_destroy = true
 #   ignore_changes      list of TF attribute paths to ignore drift on
 #   notes               free-text audit note. Plain-string fallback;
@@ -543,7 +543,7 @@ let
       };
 
       network_mode = lib.mkOption {
-        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-vm" "lxc-router" "declared" "internal-plus-lan-mac" ];
+        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" "declared" "internal-plus-lan-mac" ];
         default = "single-internal";
         description = "Which NIC/bridge layout the emitter generates. \"declared\" = the NICs come from `interfaces` (any bridge/VNet, DHCP or explicit CIDR, VLAN, MTU, MAC, IPv6) — the general form; single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both) and the custom/special-case layouts are the legacy fixed shapes kept for compatibility.";
       };
