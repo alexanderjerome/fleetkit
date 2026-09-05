@@ -12,7 +12,7 @@
 # Check entries are built with nix/lib/tf/grafana.nix mkHttpCheck /
 # mkTcpCheck — see there for the host-attachable constructor contract.
 # Pre-existing contact points / templates are IMPORTED by name:
-#   sk deploy tf import platform.grafana-cloud grafana_message_template.<n> "<name>"
+#   fleet deploy tf import platform.grafana-cloud grafana_message_template.<n> "<name>"
 
 let
   resourcesInStack = lib.filterAttrs

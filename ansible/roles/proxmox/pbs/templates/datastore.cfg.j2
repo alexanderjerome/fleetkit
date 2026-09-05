@@ -1,6 +1,41 @@
-# Rendered by ansible: roles/proxmox/pbs/tasks/datastore-config.yml.
-# Edit your inventory group vars, not here.
-
+{# Rendered by ansible: roles/proxmox/pbs/tasks/datastore-config.yml — edit
+   inventory group vars, not the file on the host. NO '#' comment lines may
+   reach the rendered output: PBS section-config rejects them ("line 1 -
+   syntax error (expected header)") and every datastore API call 400s until
+   the file parses again (INFRA-246, 2026-09-01). Jinja comments only. #}
 datastore: {{ pbs_datastore_id }}
         path {{ pbs_datastore_path }}
         backend type=s3,client={{ pbs_s3_endpoint_id }},bucket={{ pbs_s3_bucket }}
+{% if pbs_datastore_comment is defined %}
+        comment {{ pbs_datastore_comment }}
+{% endif %}
+{# Housekeeping. On an S3 backend the datastore path is only a cache, so a
+   missing gc-schedule is invisible locally: pruned snapshots drop their
+   index, but chunks are reclaimed ONLY by garbage collection, and the
+   bucket grows until the S3 host itself fills (INFRA-246: 1.6 TB of dead
+   chunks, GC never run). Always schedule GC; prune here is a datastore-wide
+   backstop for whatever the PVE job's prune-backups misses. #}
+{% if pbs_datastore_gc_schedule is defined %}
+        gc-schedule {{ pbs_datastore_gc_schedule }}
+{% endif %}
+{% if pbs_datastore_prune_schedule is defined %}
+        prune-schedule {{ pbs_datastore_prune_schedule }}
+{% endif %}
+{% if pbs_datastore_keep_last is defined %}
+        keep-last {{ pbs_datastore_keep_last }}
+{% endif %}
+{% if pbs_datastore_keep_hourly is defined %}
+        keep-hourly {{ pbs_datastore_keep_hourly }}
+{% endif %}
+{% if pbs_datastore_keep_daily is defined %}
+        keep-daily {{ pbs_datastore_keep_daily }}
+{% endif %}
+{% if pbs_datastore_keep_weekly is defined %}
+        keep-weekly {{ pbs_datastore_keep_weekly }}
+{% endif %}
+{% if pbs_datastore_keep_monthly is defined %}
+        keep-monthly {{ pbs_datastore_keep_monthly }}
+{% endif %}
+{% if pbs_datastore_keep_yearly is defined %}
+        keep-yearly {{ pbs_datastore_keep_yearly }}
+{% endif %}

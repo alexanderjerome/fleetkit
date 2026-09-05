@@ -17,11 +17,12 @@
 # minimum-viable fleet (one host, one provider, no optional services)
 # evaluates with only the settings that fleet actually exercises.
 #
-# Scope note: this is the NIX-side surface (modules, emitters,
-# images). The `fleet` CLI reads its operator-side settings from
-# `fleet.toml` at the consumer repo root — deliberately a separate,
-# eval-free file so the CLI starts fast. Values that both sides need
-# (domains, tailnet suffix) are declared in both; keep them in sync.
+# Scope note (ADR-097): this is the ONLY declaration surface — the
+# `fleet` CLI reads the same values from `.cache/fleet/catalog.json`,
+# a generated projection of this eval (the `fleet-catalog` package),
+# regenerated automatically. fleet.toml is gone; nothing is declared
+# twice. Operator-machine paths (age key, sysadmin key) are NOT
+# settings — they are conventions overridable via FLEET_* env vars.
 
 {
   options.fleet.settings = {
@@ -261,6 +262,157 @@
         example = "https://ca.example.lan:9000/acme/acme/directory";
         description = "ACME directory URL of the internal CA. null ⇒ modules default to public Let's Encrypt.";
       };
+    };
+
+    # ── CLI-facing settings (ADR-097) ────────────────────────────
+    # These existed only in fleet.toml before; the fleet-catalog
+    # projection now carries them to the launcher. Snake_case keys in
+    # freeform sets are deliberate — the catalog preserves them
+    # verbatim, and the CLI's dotted lookup paths predate this module.
+
+    opsEmail = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "ops@example.dev";
+      description = "Operations contact. null ⇒ the CLI derives ops@<domain.base>.";
+    };
+
+    backend = {
+      type = lib.mkOption {
+        type = lib.types.enum [ "s3" "local" "pg" ];
+        default = "s3";
+        description = "Tofu state backend kind. \"local\" keeps terraform.tfstate inside each stack's working dir (.tf/<slug>/) — no bucket, no cloud creds; fine for a homelab, but the state only exists on the machine that ran the apply. \"s3\" (default) is the shared-bucket estate model (ADR-097). \"pg\" is Postgres, the on-prem option that provides REAL locking via advisory locks — S3-compatible stores that cannot do conditional writes (Garage, by design) leave `use_lockfile` silently ineffective, which is unsafe wherever more than one operator or agent applies.";
+      };
+      bucket = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "acme-tofu";
+        description = "Tofu S3 state bucket (type = s3). Shared estate substrate (ADR-097) — fleet separation is the state KEY prefix, not the bucket. When set, mkFleet's `backend` argument may be omitted.";
+      };
+      region = lib.mkOption {
+        type = lib.types.str;
+        default = "us-east-1";
+        description = "AWS region of the state bucket (type = s3).";
+      };
+      pg = {
+        schemaPrefix = lib.mkOption {
+          type = lib.types.str;
+          default = "tf_";
+          description = ''
+            Schema-name prefix for the `pg` backend. Each stack gets its own
+            schema (`<prefix><slug>`), which is how stacks stay isolated in one
+            database — the equivalent of the S3 key prefix.
+          '';
+        };
+        connStrSopsPath = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = ''["dbs"]["tofu-db"]["tofu"]["conn_str"]'';
+          description = ''
+            SOPS path to the libpq connection string, exported as PG_CONN_STR
+            at run time.
+
+            The connection string is DELIBERATELY not emitted into the backend
+            block: config.tf.json is built by Nix and therefore lands in
+            /nix/store, which is world-readable. A password baked in there is
+            readable by every user on every machine that builds the stack, and
+            no amount of file permissions afterwards takes it back. OpenTofu
+            reads PG_CONN_STR from the environment for exactly this reason.
+          '';
+        };
+      };
+
+      perStack = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.attrsOf lib.types.raw);
+        default = { };
+        example = lib.literalExpression ''{ "platform-mcp" = { type = "local"; }; }'';
+        description = ''
+          Per-stack backend overrides, keyed by stack SLUG (the dot-path with
+          "." replaced by "-", e.g. "platform.core" -> "platform-core"). Each
+          value is merged over the fleet-wide backend, so an override may set
+          only what differs (usually just `type`).
+
+          The backend block is already emitted per stack, so this costs nothing
+          structurally. Two uses it exists for:
+
+            * Keep working when the shared bucket is unreachable — provision a
+              NEW stack on `type = "local"` while every existing stack stays
+              pointed at the remote it already lives in.
+            * Break a bootstrap cycle — a stack that provisions the fleet's own
+              object storage should not keep its state inside that storage.
+
+          DELIBERATE ACT, NOT A FALLBACK. Pointing an EXISTING stack at an empty
+          backend makes tofu read its entire inventory as "not created yet", and
+          an apply from there would recreate the fleet. Override a stack that has
+          no remote state yet, or migrate the state first and record that you did.
+        '';
+      };
+    };
+
+    cli.extensionsDir = lib.mkOption {
+      type = lib.types.str;
+      default = "cli-ext";
+      description = "Repo-relative directory of consumer CLI extension modules (ADR-095 COMMANDS/ATTACH files).";
+    };
+
+    sopsFiles = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = lib.literalExpression ''{ integrations = "nix/secrets/integrations.yaml"; }'';
+      description = ''
+        Which SOPS file owns which TOP-LEVEL key tree, for fleets that split
+        their store by resource group. Keys are tree names ("integrations",
+        "services", "dbs", …); values are repo-relative paths. Anything not
+        listed falls back to `sopsSecretsFile`.
+
+        Splitting a store and leaving the original populated is the trap this
+        exists to close: a consumer aimed at the old file ERRORS when the key
+        is gone, but returns a diverged old value when a stale duplicate
+        survives — and that case never fails. Declaring routes once means a
+        consumer cannot hold a private, wrong opinion about where a tree lives.
+      '';
+    };
+
+    tfSopsFile = lib.mkOption {
+      type = lib.types.str;
+      default = "nix/secrets/secrets.yaml";
+      example = "nix/secrets/integrations.yaml";
+      description = ''
+        Repo-relative SOPS file the TERRANIX layer reads at `tofu apply` time
+        (the `data.sops_file.secrets` source). These are provider credentials —
+        `integrations.*` — which need not live in the same file NixOS hosts
+        default to. A fleet that splits its SOPS store per resource group must
+        point this at whichever file holds the integrations tree, or every
+        `tofu plan` fails with "The given key does not identify an element in
+        this collection value".
+      '';
+    };
+
+    sopsSecretsFile = lib.mkOption {
+      type = lib.types.str;
+      default = "nix/secrets/secrets.yaml";
+      description = "Repo-relative path of the default sops file the CLI's secrets commands operate on.";
+    };
+
+    pki.acmeDnsApiBase = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "http://192.0.2.100:8081";
+      description = "acme-dns registration API on the fleet's DNS edge. Consumed by `fleet pki` (required, asserted there).";
+    };
+
+    pveInstall = lib.mkOption {
+      type = lib.types.attrsOf lib.types.raw;
+      default = { };
+      example = { serve_host = "192.0.2.91"; iso_sr_name = "NFS ISO Library"; };
+      description = "Unattended-PVE-install constants for `fleet pve install` (serve_host, iso_sr_uuid, iso_sr_name, main_sr_name, network_name, installer_iso, presets). Freeform: substrate constants whose long-term home is the typed provider nodes (ADR-096); keys pass to the catalog verbatim.";
+    };
+
+    mcp.grafanaTokenSopsPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "services/grafana/mcp_token";
+      description = "Sops key path of the read-only Grafana service-account token used by `fleet mcp config`.";
     };
 
     cache = {

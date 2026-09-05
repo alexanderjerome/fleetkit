@@ -1,6 +1,6 @@
 { config, lib, ... }:
 
-# Unified Proxmox/XCP-ng fleet manifest — schema v2 (SKRYBITDEV-599).
+# Unified Proxmox/XCP-ng fleet manifest — schema v2.
 #
 # Single source of truth for:
 #   1. tf emitters in nix/tf/        (TF JSON per-leaf-stack)
@@ -27,7 +27,7 @@ let
   enabledCompute = filterAttrs (_: e: e.enabled or true) cfg.compute;
 
   # `provisioning = "external"` entries (INFRA-170 / ADR-080) are
-  # NixOS-managed only: they stay in hostsJson (Colmena target, sk
+  # NixOS-managed only: they stay in hostsJson (Colmena target, fleet
   # remote/inventory) but never reach the Terraform emitters or the
   # provider-coupled validators — their machine lives outside this
   # repo's providers.
@@ -39,9 +39,18 @@ let
   entriesByName = enabledCompute // cfg.resources;
 
   # ── Derived: fleet.stacks ───────────────────────────────────────
-  # Flat map { "${env}.${stack}" = [ entry ... ]; } — consumed by
-  # nix/tf/default.nix to emit one terranixConfiguration per leaf.
-  stacksById = groupBy (e: "${e.env}.${e.stack}") allEntries;
+  # Flat map { "[<fleet>.]${env}.${stack}" = [ entry ... ]; } — consumed
+  # by nix/tf/default.nix to emit one terranixConfiguration per leaf.
+  # Entries from a named fleet namespace (ADR-097) enumerate with their
+  # fleet_ns as stack-ID prefix, which flows into the slug and thus the
+  # tofu state key (tf/<fleet>-<env>-<stack>/) — per-fleet separation
+  # inside the shared bucket, with the incumbent's keys untouched. The
+  # CLI's dot-path prefix matching gives per-fleet stack selection with
+  # no new flags (`fleet deploy tf preview <fleet>`).
+  stackIdOf = e:
+    (lib.optionalString ((e.fleet_ns or null) != null) "${e.fleet_ns}.")
+    + "${e.env}.${e.stack}";
+  stacksById = groupBy stackIdOf allEntries;
 
   # ── Validator helpers ──────────────────────────────────────────
   # 1. Unique vm_id within (provider_instance, kind) — NOT global.
@@ -342,6 +351,7 @@ in {
     ./compute.nix
     ./resources.nix
     ./hosts-registry.nix
+    ./v2-normalize.nix       # ADR-096: provider-tree authoring → flat normal form
   ];
 
   options.fleet = {
@@ -349,7 +359,7 @@ in {
       type = lib.types.listOf lib.types.str;
       default = [
         "bitcoin" "indexer" "postgres" "timescaledb"
-        "supabase" "messaging" "auth" "backup" "storage"
+        "messaging" "auth" "backup" "storage"
       ];
       description = "Tags whose presence forces protect=true (enforced by validator).";
     };
@@ -366,7 +376,7 @@ in {
       '';
     };
 
-    # Legacy hosts.json-shaped export — keeps mkHosts / sk launcher /
+    # Legacy hosts.json-shaped export — keeps mkHosts / fleet launcher /
     # grafana-stack / sssd working during the transition. Built from
     # fleet.compute so there's only one source of truth.
     hostsJson = lib.mkOption {
@@ -393,7 +403,7 @@ in {
 
   # hostsJson reflects only enabled entries — disabled installers
   # shouldn't pollute the inventory, get Colmena targets, or appear
-  # in `sk inventory`.
+  # in `fleet inventory`.
   config.fleet.hostsJson = mapAttrs (name: meta: {
     hostname = name;
     vmid = meta.vm_id;
@@ -415,7 +425,7 @@ in {
       if meta.kind == "container" then "pve.lxc"
       else if lib.hasPrefix "xen-orchestra." meta.provider_instance then "xcpng.vm"
       else "pve.qemu";
-    # Needed by `sk inventory generate` to know which entries should
+    # Needed by `fleet inventory generate` to know which entries should
     # be IP-discovered via XOA vs. PVE. The Proxmox path also benefits
     # from this for future multi-provider drift detection.
     provider_instance = meta.provider_instance;

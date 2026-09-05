@@ -24,7 +24,7 @@ let
     # (sshd rejects logins whose shell is missing).
     defaultShell = "/run/current-system/sw/bin/bash";
     # INFRA-199: the sssd-probe service user (login-only, zero sudo) must be
-    # able to SSH into every SSSD host so `sk devtools sssd-test` can exercise
+    # able to SSH into every SSSD host so `fleet devtools sssd-test` can exercise
     # the full Authentik→LDAP outpost→SSSD→sshd chain. An empty allowedGroups
     # already means allow-any-authenticated — only append to real restrictions
     # (appending to [] would flip allow-all into probe-only).

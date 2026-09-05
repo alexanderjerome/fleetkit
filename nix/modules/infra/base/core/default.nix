@@ -191,5 +191,7 @@ in
   nix.settings.min-free = 1024 * 1024 * 1024;     # 1 GiB
   nix.settings.max-free = 5 * 1024 * 1024 * 1024; # 5 GiB
 
-  system.stateVersion = "25.11";
+  # Overridable: adopted hosts keep the stateVersion they were born with
+  # (changing it can migrate on-disk state formats).
+  system.stateVersion = lib.mkDefault "25.11";
 }

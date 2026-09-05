@@ -8,12 +8,12 @@ so the operator can:
   - Re-attach to watch progress at any time
   - Prevent accidental double-deploys of the same target
 
-Session naming convention: ``sk-<family>-<target>`` (e.g.
-``sk-deploy-netgate``, ``sk-tf-apply-platform-bootstrap``). Prefix
-``sk-`` lets us find all fleet-owned sessions with a single glob.
+Session naming convention: ``fleet-<family>-<target>`` (e.g.
+``fleet-deploy-netgate``, ``fleet-tf-apply-platform-bootstrap``). Prefix
+``fleet-`` lets us find all fleet-owned sessions with a single glob.
 
 Opt out via ``--no-session`` on any supporting command or the
-``SK_NO_SESSION=1`` env var (for CI / scripts).
+``FLEET_NO_SESSION=1`` env var (for CI / scripts).
 """
 from __future__ import annotations
 
@@ -32,6 +32,8 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from ._util import env_get
+
 console = Console()
 
 # ── State persistence ────────────────────────────────────────────────
@@ -40,10 +42,25 @@ console = Console()
 # presses ENTER). For authoritative RUN/DONE-OK/DONE-FAIL post-teardown
 # we write a small sentinel file when the wrapped command exits.
 
-_STATE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "sk" / "sessions"
+# User-global (XDG), NOT the project-root `.cache/fleet` that
+# _util.fleet_cache_dir() manages — different scope, same rename.
+_CACHE_HOME = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+_STATE_DIR = _CACHE_HOME / "fleet" / "sessions"
+_LEGACY_STATE_DIR = _CACHE_HOME / "sk" / "sessions"
 
 
 def _ensure_state_dir() -> None:
+    # One-time silent migration of the pre-INFRA-218 location, mirroring
+    # _util.fleet_cache_dir(). Sentinels for sessions still running under a
+    # tmux command rendered by the old binary keep landing in the legacy
+    # dir; _read_state() simply misses those and reports RUN/UNKNOWN from
+    # liveness instead, which is the same degradation as a missing file.
+    if not _STATE_DIR.exists() and _LEGACY_STATE_DIR.is_dir():
+        try:
+            _STATE_DIR.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(_LEGACY_STATE_DIR, _STATE_DIR)
+        except OSError:
+            pass  # cross-device / permissions — fall through, start fresh
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -103,7 +120,7 @@ def _pane_capture(name: str, lines: int = 100) -> str:
 # ── Core wrapping primitive ──────────────────────────────────────────
 
 def running_inside(session_name: str) -> bool:
-    return os.environ.get("SK_SESSION_NAME") == session_name
+    return env_get("FLEET_SESSION_NAME") == session_name
 
 
 def dispatch_session(
@@ -116,7 +133,7 @@ def dispatch_session(
 ) -> int:
     """Launch ``cmd`` inside a new detached tmux session.
 
-    - If called from INSIDE the target session (``SK_SESSION_NAME`` set),
+    - If called from INSIDE the target session (``FLEET_SESSION_NAME`` set),
       returns -1 so the caller can fall through to its inline path.
     - If the named session already exists and is alive, refuses with
       instructions to attach or kill.
@@ -125,7 +142,7 @@ def dispatch_session(
 
     Returns 0 on successful dispatch, non-zero on refusal / error.
     """
-    if os.environ.get("SK_NO_SESSION") == "1":
+    if env_get("FLEET_NO_SESSION") == "1":
         return -1
     if running_inside(session_name):
         return -1
@@ -146,17 +163,17 @@ def dispatch_session(
                        capture_output=True)
 
     # Build the shell command that runs inside the tmux pane.
-    # We set SK_SESSION_NAME so the inner `sk` invocation knows not to
+    # We set FLEET_SESSION_NAME so the inner `fleet` invocation knows not to
     # re-wrap itself, capture the exit code, write a sentinel, and hold
     # the pane open for scrollback.
-    env_parts = [f"SK_SESSION_NAME={shlex.quote(session_name)}"]
+    env_parts = [f"FLEET_SESSION_NAME={shlex.quote(session_name)}"]
     if env:
         for k, v in env.items():
             env_parts.append(f"{k}={shlex.quote(str(v))}")
     cmd_str = " ".join(shlex.quote(c) for c in cmd)
 
     sentinel_cmd = (
-        f"_sk_write_status() {{ "
+        f"_fleet_write_status() {{ "
         f"  mkdir -p {shlex.quote(str(_STATE_DIR))}; "
         f"  printf '%s\\n' \"{{\\\"status\\\":\\\"$1\\\",\\\"updated_at\\\":$(date +%s),\\\"exit_code\\\":$2}}\" "
         f"  > {shlex.quote(str(_state_file(session_name)))}; "
@@ -164,11 +181,11 @@ def dispatch_session(
     )
     wrapped = (
         f"{sentinel_cmd}; "
-        f"_sk_write_status RUN 0; "
+        f"_fleet_write_status RUN 0; "
         f"env {' '.join(env_parts)} {cmd_str}; "
         f"_rc=$?; "
-        f"if [ $_rc -eq 0 ]; then _sk_write_status DONE-OK $_rc; "
-        f"else _sk_write_status DONE-FAIL $_rc; fi; "
+        f"if [ $_rc -eq 0 ]; then _fleet_write_status DONE-OK $_rc; "
+        f"else _fleet_write_status DONE-FAIL $_rc; fi; "
         f"echo; echo '=== {session_name} exited (rc=' $_rc ') — press ENTER to close ==='; "
         f"read"
     )
@@ -231,14 +248,28 @@ class _SessionInfo:
     exit_code: int | None
 
 
-def _collect_sessions(prefix: str = "sk-") -> list[_SessionInfo]:
+# New sessions are only ever created with SESSION_PREFIX. LEGACY_PREFIX is
+# matched on *discovery* so `fleet sessions list/kill` can still see and reap
+# sk-* sessions that a pre-INFRA-218 build left running. Drop it with the
+# _util env shim (2026-12-01) — by then no such session can still exist.
+SESSION_PREFIX = "fleet-"
+LEGACY_SESSION_PREFIX = "sk-"
+
+
+def _matches_prefix(name: str, prefix: str) -> bool:
+    if name.startswith(prefix):
+        return True
+    return prefix == SESSION_PREFIX and name.startswith(LEGACY_SESSION_PREFIX)
+
+
+def _collect_sessions(prefix: str = SESSION_PREFIX) -> list[_SessionInfo]:
     result = subprocess.run(["tmux", "ls"], capture_output=True, text=True)
     if result.returncode != 0:
         return []
     infos: list[_SessionInfo] = []
     for line in result.stdout.splitlines():
         name = line.split(":", 1)[0]
-        if not name.startswith(prefix):
+        if not _matches_prefix(name, prefix):
             continue
         alive = _session_alive(name)
         dump = _pane_capture(name, 30)
@@ -267,7 +298,7 @@ def sessions_cli() -> None:
 
 
 @sessions_cli.command("list")
-@click.option("--prefix", default="sk-", help="Session name prefix filter.")
+@click.option("--prefix", default=SESSION_PREFIX, help="Session name prefix filter.")
 def sessions_list(prefix: str) -> None:
     """One-row-per-session overview (state, last line)."""
     infos = _collect_sessions(prefix)
@@ -297,9 +328,9 @@ def sessions_attach(name: str) -> None:
 @sessions_cli.command("kill")
 @click.argument("name")
 def sessions_kill(name: str) -> None:
-    """Kill a specific session, or 'all' for every sk-* session."""
+    """Kill a specific session, or 'all' for every fleet-* session."""
     if name == "all":
-        for info in _collect_sessions("sk-"):
+        for info in _collect_sessions(SESSION_PREFIX):
             subprocess.run(["tmux", "kill-session", "-t", info.name])
             console.print(f"killed {info.name}")
         return
@@ -311,7 +342,7 @@ def sessions_kill(name: str) -> None:
 
 
 @sessions_cli.command("status")
-@click.option("--prefix", default="sk-")
+@click.option("--prefix", default=SESSION_PREFIX)
 def sessions_status(prefix: str) -> None:
     """Alias of list — match scripts/tmux-deploy.sh UX."""
     ctx = click.get_current_context()

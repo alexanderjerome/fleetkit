@@ -10,8 +10,8 @@
 # must be in scope on the caller. The VM's per-host attrs come via
 # the `vmMeta` argument (a fleet.compute entry).
 #
-# Extracted from fleet/resources.nix during SKRYBITDEV-618 so the XOA
-# emitter can share the renderer without circular imports.
+# Extracted out of fleet/resources.nix so the XOA emitter can share the
+# renderer without circular imports.
 
 let
   net = config.fleet.network;

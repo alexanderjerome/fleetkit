@@ -11,7 +11,7 @@
 #
 # Bootstrap recipe (per DB host):
 #   1. Mint a Garage key + grant + save credentials to SOPS:
-#        sk s3 mint-key pgbackrest-<stanza>-key pg-backups \
+#        fleet s3 mint-key pgbackrest-<stanza>-key pg-backups \
 #          --sops-prefix integrations/pgbackrest/<stanza>
 #   2. Enable on the host:
 #        infra.data.postgresql.backup = {

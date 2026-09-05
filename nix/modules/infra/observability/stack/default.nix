@@ -77,21 +77,31 @@ let
             };
             labels = { severity = "warning"; };
           })
-          # Garage S3 fill — backs BOTH the atticd Nix cache and media-service
-          # uploads, so a full Garage breaks pushes + uploads. max() over the
-          # data/metadata volumes; warn at 85%.
-          (grafana.mkAlertRule {
-            uid = "garage-disk-filling";
-            title = "Garage S3 Disk Filling";
-            expr = ''max(1 - garage_local_disk_avail / garage_local_disk_total) * 100'';
-            evaluator = { type = "gt"; params = [ 85 ]; };
-            duration = "10m";
-            annotations = {
-              summary = "Garage S3 backend is over 85% full";
-              description = "Garage (s3 host) stores the atticd Nix cache AND service uploads — a full Garage breaks pushes and uploads. Check the /data volume.";
-            };
-            labels = { severity = "warning"; };
-          })
+          # Garage S3 fill — backs the atticd Nix cache, Loki chunks and
+          # service uploads. Warn at 85%; critical at 90% (INFRA-247: the
+          # warning tier alone sat unseen for 13 days while /data on the s3
+          # host crossed 96%).
+          (alerts.garageDiskFilling { threshold = 85; severity = "warning"; })
+          (alerts.garageDiskFilling { threshold = 90; severity = "critical"; duration = "5m"; })
+          # Archiving that stops making progress WITHOUT an error count
+          # (INFRA-247) — the failure mode pgbackrestArchiveFailing cannot
+          # see. 1h since the last shipped segment while postgres is up.
+          (alerts.pgArchiveStalled { maxAge = 3600; severity = "critical"; })
+        ];
+      })
+      # ── Fleet Health — generic host rules (INFRA-106, restored INFRA-247) ──
+      # Disk %/absolute, failed systemd units, pg_up. Same group name and
+      # rule uids as the retired fleet-health.yaml so the live provisioned
+      # rules are adopted in place. Every fleet host with node_exporter /
+      # the Alloy systemd collector is covered automatically.
+      (grafana.mkAlertGroup {
+        name = "Fleet Health";
+        rules = [
+          (alerts.diskLowPercent { threshold = 15; severity = "warning"; duration = "10m"; })
+          (alerts.diskLowPercent { threshold = 7; severity = "critical"; duration = "5m"; })
+          (alerts.diskFreeBytesFloor { })
+          (alerts.unitFailed { })
+          (alerts.postgresDown { })
         ];
       })
       # ── Hypervisor health (INFRA-167, follow-up to INFRA-164) ────
@@ -123,6 +133,60 @@ let
         rules = fleetContributedRules;
       })
     ];
+  # ── Notification routing (INFRA-247) ──────────────────────────
+  # Severity tiers, each its own route so repeat cadence and receiver are
+  # per-tier. Before this every alert — 13 days of critical disk / WAL /
+  # pg-down included — went to ONE Slack channel at one 4h cadence and was
+  # never seen. A Slack incoming webhook is bound to a single channel, so
+  # a second channel means a second webhook: `criticalWebhookSecret`.
+  #
+  # Tree (Alertmanager semantics: first matching route wins, children
+  # inherit receiver/group_by/repeat unless overridden):
+  #
+  #   root  → slack-fleet, group_by [alertname instance], repeat <default>
+  #   ├── severity=critical → slack-alerts (or slack-fleet until the
+  #   │                       webhook secret exists), repeat <critical>
+  #   │     └── alertname in groupByAlertnameOnly → group_by [alertname]
+  #   └── severity=warning  → slack-fleet, repeat <warning>
+  #         └── alertname in groupByAlertnameOnly → group_by [alertname]
+  #
+  # Anything without a severity label (or with another value) falls to root.
+  alerting = cfg.alerting;
+  criticalSecret = alerting.slack.criticalWebhookSecret;
+
+  # Eval-time preflight for the critical webhook: sops-nix does validate
+  # declared keys, but only inside the manifest derivation at BUILD time,
+  # with a log-buried error. We peek at the (plaintext-keyed, encrypted-
+  # valued) default sops file for the key's last path segment instead, so
+  # a missing secret degrades to a loud eval warning + criticals routed to
+  # slack-fleet — the deploy still succeeds and the fix is one command
+  # away. A false "present" (same-named key elsewhere in the file) is still
+  # caught by sops-nix's build-time check.
+  sopsFileHasKey = file: key:
+    lib.any (l: lib.hasPrefix "${key}:" (lib.trim l))
+      (lib.splitString "\n" (builtins.readFile file));
+  criticalSecretAvailable = criticalSecret != null
+    && sopsFileHasKey config.sops.defaultSopsFile (lib.last (lib.splitString "/" criticalSecret));
+  criticalReceiver = if criticalSecretAvailable then "slack-alerts" else "slack-fleet";
+
+  # Child route: named alerts group by alertname only, so a whole-host
+  # outage is one post listing every failed unit, not one post per unit.
+  alertnameOnlyRoutes = receiver:
+    lib.optional (alerting.groupByAlertnameOnly != [ ]) {
+      inherit receiver;
+      object_matchers = [
+        [ "alertname" "=~" "^(${lib.concatMapStringsSep "|" lib.escapeRegex alerting.groupByAlertnameOnly})$" ]
+      ];
+      group_by = [ "alertname" ];
+    };
+  severityRoute = { severity, receiver, repeatInterval }:
+    let children = alertnameOnlyRoutes receiver;
+    in {
+      inherit receiver;
+      object_matchers = [ [ "severity" "=" severity ] ];
+      repeat_interval = repeatInterval;
+    } // lib.optionalAttrs (children != [ ]) { routes = children; };
+
   nixAlertsProvisioning = pkgs.writeText "fleet-nix-alerts.yaml" (builtins.toJSON {
     apiVersion = 1;
     groups = fleetNixAlertGroups;
@@ -212,6 +276,58 @@ in
         YAML files (*.yaml). Merged with the framework's Nix-built alert
         catalog into the single provisioned alerting path.
       '';
+    };
+
+    alerting = {
+      slack.criticalWebhookSecret = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "services/grafana/slack_webhook_alerts";
+        description = ''
+          SOPS key (in `sops.defaultSopsFile`) holding a SECOND Slack incoming
+          webhook, bound to the channel that must see `severity=critical`
+          alerts. Provisions contact point `slack-alerts` and routes criticals
+          to it; every other severity stays on `slack-fleet`
+          (`services/grafana/slack_webhook`). A Slack webhook is bound to one
+          channel, so two channels need two webhooks — create the second in
+          Slack (App → Incoming Webhooks → Add to channel) and store it with
+          `fleet devtools secrets keys add <this path> <webhook url>`.
+
+          null keeps the single-channel setup. If the key is set but not yet
+          present in the sops file, evaluation WARNS and criticals fall back
+          to `slack-fleet` (so the deploy still succeeds); once the key exists
+          the next deploy wires the second channel automatically.
+        '';
+      };
+      repeatIntervals = {
+        default = mkOption {
+          type = types.str;
+          default = "4h";
+          description = "Root notification policy repeat_interval — alerts without a severity label (or with one no tier matches).";
+        };
+        critical = mkOption {
+          type = types.str;
+          default = "1h";
+          description = "repeat_interval for the severity=critical route.";
+        };
+        warning = mkOption {
+          type = types.str;
+          default = "24h";
+          description = "repeat_interval for the severity=warning route.";
+        };
+      };
+      groupByAlertnameOnly = mkOption {
+        type = types.listOf types.str;
+        default = [ "Systemd Unit Failed" ];
+        example = [ "Systemd Unit Failed" "Disk Low (warning)" ];
+        description = ''
+          Alert titles grouped by `alertname` only (the tree default is
+          `[alertname instance]`): one Slack post per firing alert name across
+          all hosts, so a single host outage that fails 25 units is one message
+          listing them rather than 25 messages. Applied under both severity
+          routes.
+        '';
+      };
     };
 
     extraDatasources = mkOption {
@@ -324,6 +440,24 @@ in
       restartUnits = [ "grafana.service" ];
     } // { owner = "grafana"; };
 
+    # Second webhook → the critical-alerts channel (INFRA-247). Declared only
+    # once the key is really in the sops file; see criticalSecretAvailable.
+    # (A null dynamic attribute name is dropped by Nix, so this is a no-op
+    # when the option is unset.)
+    sops.secrets.${criticalSecret} = lib.mkIf criticalSecretAvailable (sopsLib.mkSecret {
+      restartUnits = [ "grafana.service" ];
+    } // { owner = "grafana"; });
+
+    warnings = lib.optional (criticalSecret != null && !criticalSecretAvailable) ''
+      infra.observability.stack.alerting.slack.criticalWebhookSecret = "${criticalSecret}"
+      but no `${lib.last (lib.splitString "/" criticalSecret)}:` key was found in
+      ${toString config.sops.defaultSopsFile}. Critical alerts are being routed
+      to the slack-fleet contact point until it exists. Create a Slack incoming
+      webhook for the critical channel, then run:
+        fleet devtools secrets keys add ${criticalSecret} '<webhook url>'
+      and redeploy the grafana host.
+    '';
+
     services.grafana = {
       enable = true;
       settings.server = {
@@ -407,23 +541,43 @@ in
       # merged into one dir (see alertRulesDir above).
       provision.alerting.rules.path = alertRulesDir;
 
-      # Slack contact point (INFRA-106) — webhook loaded from SOPS via $__file{}.
+      # Slack contact points — webhooks loaded from SOPS via $__file{}.
+      #   slack-fleet  (INFRA-106): the everything channel — warnings + root.
+      #   slack-alerts (INFRA-247): severity=critical, only when its webhook
+      #                secret exists (see alerting.slack.criticalWebhookSecret).
       provision.alerting.contactPoints.settings = {
         apiVersion = 1;
-        contactPoints = [{
+        contactPoints = [
+          {
+            orgId = 1;
+            name = "slack-fleet";
+            receivers = [{
+              uid = "slack_fleet_webhook";
+              type = "slack";
+              disableResolveMessage = false;
+              settings.url = "$__file{${config.sops.secrets."services/grafana/slack_webhook".path}}";
+            }];
+          }
+        ] ++ lib.optional criticalSecretAvailable {
           orgId = 1;
-          name = "slack-fleet";
+          name = "slack-alerts";
           receivers = [{
-            uid = "slack_fleet_webhook";
+            uid = "slack_alerts_webhook";
             type = "slack";
             disableResolveMessage = false;
-            settings.url = "$__file{${config.sops.secrets."services/grafana/slack_webhook".path}}";
+            settings.url = "$__file{${config.sops.secrets.${criticalSecret}.path}}";
           }];
-        }];
+        };
       };
 
-      # Root notification policy → route everything to Slack (the whole point:
-      # disk/unit-failed/postgres-down must page, not just sit in the UI).
+      # Notification policy tree — see the routing comment above
+      # `alerting = cfg.alerting`. Root catches everything (the whole point:
+      # disk/unit-failed/postgres-down must page, not just sit in the UI);
+      # severity routes set the receiver + repeat cadence per tier.
+      # Grafana's embedded Alertmanager has NO inhibition rules and its mute
+      # timings are calendar-only, so cross-alert suppression (PostgreSQL
+      # Down silencing the same host's failed units) lives in the PromQL of
+      # alerts.unitFailed instead.
       provision.alerting.policies.settings = {
         apiVersion = 1;
         policies = [{
@@ -432,7 +586,19 @@ in
           group_by = [ "alertname" "instance" ];
           group_wait = "30s";
           group_interval = "5m";
-          repeat_interval = "4h";
+          repeat_interval = alerting.repeatIntervals.default;
+          routes = [
+            (severityRoute {
+              severity = "critical";
+              receiver = criticalReceiver;
+              repeatInterval = alerting.repeatIntervals.critical;
+            })
+            (severityRoute {
+              severity = "warning";
+              receiver = "slack-fleet";
+              repeatInterval = alerting.repeatIntervals.warning;
+            })
+          ];
         }];
       };
     };

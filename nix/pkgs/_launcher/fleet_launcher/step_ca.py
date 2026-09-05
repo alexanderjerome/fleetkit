@@ -5,7 +5,7 @@ root CA and intermediate certificates that step-ca needs to start.
 
 Requires:
   - netgate container running and SSH-reachable
-  - SOPS secrets.yaml with step-ca/intermediate-password
+  - SOPS services.yaml with services/step-ca/intermediate_password
   - .cache/fleet/hosts.json with netgate entry
 """
 from __future__ import annotations
@@ -79,11 +79,16 @@ def bootstrap_step_ca(ca_name, dns, address, provisioner, data_dir, force):
     start serving ACME certificates for internal services.
     """
     root = find_project_root()
-    secrets_file = str(root / "nix" / "secrets" / "secrets.yaml")
+    # Two things were wrong here: a hardcoded file, and a key path that
+    # exists in NO file — a flat top-level `step-ca` predating the nested
+    # resource layout. The real key is services/step-ca/intermediate_password.
+    from .config import file_for as _file_for
+    secrets_file = str(_file_for("services"))
 
     # 1. Resolve secrets
     console.print("[bold]Resolving secrets from SOPS...[/bold]")
-    intermediate_password = _sops_decrypt(secrets_file, '["step-ca"]["intermediate-password"]')
+    intermediate_password = _sops_decrypt(
+        secrets_file, '["services"]["step-ca"]["intermediate_password"]')
     console.print("  Intermediate password: [green]OK[/green]")
 
     # 2. Find netgate

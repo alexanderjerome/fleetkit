@@ -20,7 +20,7 @@
 #   cpu_cores, memory_mb, swap_mb, root_disk_gb, root_disk_datastore
 #   mount_points        list of { datastore, path, size, backup } (LXC only)
 #   features            { nesting, fuse, keyctl } (LXC only)
-#   network_mode        "single-internal" | "single-external" | "dual" | "custom-netgate" | "custom-btc-testnet" | "custom-vm" | "lxc-router"
+#   network_mode        "single-internal" | "single-external" | "dual" | "custom-netgate" | "custom-btc-testnet" | "custom-vm" | "lxc-router" | "internal-plus-lan-mac"
 #   protect             bool — emits lifecycle.prevent_destroy = true
 #   ignore_changes      list of TF attribute paths to ignore drift on
 #   notes               free-text audit note. Plain-string fallback;
@@ -416,7 +416,7 @@ let
         default = true;
         description = ''
           Toggle for build-on-demand entries. When false, the entry is
-          filtered out before validation + emission, so `sk deploy tf
+          filtered out before validation + emission, so `fleet deploy tf
           apply <stack>` neither provisions nor preserves it. Flip to
           true to materialise; flip back to false (and apply) to
           destroy. See nix/hosts/xoa/xo-installer-v10.nix for the
@@ -426,10 +426,10 @@ let
 
       # Who creates/destroys the machine. "managed" (default) = this
       # repo's terranix/tofu pipeline; the entry lands in a fleet.stack
-      # and is provisioned by `sk deploy tf apply`. "external" = the
+      # and is provisioned by `fleet deploy tf apply`. "external" = the
       # machine exists outside this repo's providers (e.g. the homelab
       # dev server, INFRA-170 / ADR-080): the entry still feeds
-      # hostsJson (Colmena target, `sk remote`, `sk inventory`) but is
+      # hostsJson (Colmena target, `fleet remote`, `fleet inventory`) but is
       # excluded from fleet.stacks (no Terraform emitted) and from the
       # provider-coupled validators. `provider_instance` remains
       # required as a descriptive label (e.g. "external.homelab") so
@@ -543,7 +543,7 @@ let
       };
 
       network_mode = lib.mkOption {
-        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" "declared" ];
+        type = lib.types.enum [ "single-internal" "single-external" "dual" "custom-netgate" "custom-btc-testnet" "custom-vm" "lxc-router" "declared" "internal-plus-lan-mac" ];
         default = "single-internal";
         description = "Which NIC/bridge layout the emitter generates. \"declared\" = the NICs come from `interfaces` (any bridge/VNet, DHCP or explicit CIDR, VLAN, MTU, MAC, IPv6) — the general form; single-internal (one NIC on the internal bridge), single-external (one NIC on the LAN bridge), dual (both) and the custom/special-case layouts are the legacy fixed shapes kept for compatibility.";
       };
@@ -580,6 +580,49 @@ let
         default = null;
         example = "vmbr2";
         description = "Bridge the legacy `single-internal` mode attaches eth0 to. null = vmbr1, or vmbr0 when the provider instance is listed in fleet.settings.providers.proxmox.singleBridgeInstances. (Declared-mode hosts set the bridge per interface instead.)";
+      };
+
+      fleet_ns = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "jeirslab";
+        description = "Fleet namespace this entry belongs to (ADR-097). null = the incumbent/default fleet (top-level provider tree; unprefixed stacks + legacy state keys). Set by the v2 normaliser when lifting from fleet.fleets.<name> — not authored by hand.";
+      };
+
+      scope = lib.mkOption {
+        type = lib.types.enum [ "fleet" "estate" ];
+        default = "fleet";
+        description = "ADR-097 derivation contract: an \"estate\"-scoped resource is a singleton serving every fleet on this substrate (router/DNS edge, builder, observability) and may fold ALL fleets' manifests into its config; \"fleet\"-scoped resources see only their own namespace. Enforcement lands with the second fleet — today this is declared intent + docs surface.";
+      };
+
+      provides = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "proxmox.prod";
+        description = "This machine IS a member (node) of the named provider instance — the ADR-096 recursive estate link. Its resource name must equal the member/node name it provides. Drives derived hypervisor scrape targets and layer-dependency queries.";
+      };
+
+      # INFRA-227: deprecated flat alias of `startup.order`. Prefer the
+      # structured `startup` option; the emitter feeds this into it when
+      # `startup` is unset. Kept so homelab consumers authoring the flat
+      # form keep working.
+      startup_order = lib.mkOption {
+        type = lib.types.nullOr lib.types.int;
+        default = null;
+        example = 3;
+        description = "Deprecated flat alias of `startup.order` — PVE LXC boot ordering (lower boots first). null = PVE default ordering. Prefer the structured `startup` option.";
+      };
+
+      bootOrder = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum [ "cnd" "dnc" ]);
+        default = null;
+        description = "XO VMs: explicit boot order (c=disk n=network d=dvd); null derives from tags (transient => dnc). Authored form of what the post-create boot-order hook applies.";
+      };
+
+      mac_address_eth1 = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Pin the eth1 MAC address. Required by `internal-plus-lan-mac` mode (a second NIC on the internal bridge carrying an ingress identity a LAN-router port-forward targets by MAC).";
       };
 
       import = lib.mkOption {

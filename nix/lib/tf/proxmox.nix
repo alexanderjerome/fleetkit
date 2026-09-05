@@ -77,10 +77,20 @@ let
   # when it differs from what the emitter produced before the option
   # existed (protection off, startup unmanaged).
   lifecycleAttrs = meta:
+    let
+      # INFRA-227: `startup_order` is a deprecated flat alias of the
+      # structured `startup.order`. One knob renders here; the structured
+      # form wins when both are set.
+      effectiveStartup =
+        if (meta.startup or null) != null then meta.startup
+        else if (meta.startup_order or null) != null
+        then { order = meta.startup_order; up_delay = null; down_delay = null; }
+        else null;
+    in
     lib.optionalAttrs (meta.protection or false) { protection = true; }
-    // lib.optionalAttrs ((meta.startup or null) != null) {
+    // lib.optionalAttrs (effectiveStartup != null) {
       startup = lib.filterAttrs (_: v: v != null) {
-        inherit (meta.startup) order up_delay down_delay;
+        inherit (effectiveStartup) order up_delay down_delay;
       };
     };
 
@@ -199,6 +209,30 @@ let
         }];
       };
     }
+    # single-internal plus a SECOND NIC on the same flat-L2 internal
+    # bridge, carrying a pinned MAC. The use case is an ingress identity
+    # a LAN-router port-forward targets by MAC: the host keeps its normal
+    # internal address on eth0 and answers a second, historically
+    # separate address on eth1. Declaring the NIC here is the point —
+    # a hand-added `pct set` NIC is not in the manifest, so the next
+    # apply reconciles it away and the ingress silently dies.
+    # In-guest addressing belongs in the host's systemd.network config;
+    # only the attachment + MAC are provider state. Requires
+    # meta.mac_address_eth1.
+    else if mode == "internal-plus-lan-mac" then {
+      network_interface = [
+        (nic { name = "eth0"; bridge = internalBridge; })
+        (nic { name = "eth1"; bridge = internalBridge;
+               mac_address = meta.mac_address_eth1; })
+      ];
+      initialization = {
+        hostname = meta._name;
+        dns = dnsConfig;
+        ip_config = [{
+          ipv4 = { address = "${meta.internal_ip}/24"; } // optGw net.gateway;
+        }];
+      };
+    }
     # ADR-021: dual-NIC LXC that IS a LAN gateway. eth0/vmbr0 carries
     # the WAN-side address + default route (fleet.network.lan_gateway);
     # eth1/vmbr1 carries the LAN-side address with no gateway (this host
@@ -308,12 +342,17 @@ in rec {
       # NixOS LXC setup plugin (PVE::LXC::Setup::NixOS) whose setup_network
       # writes a static /etc/systemd/network/eth0.network from the net0
       # ip=/gw= at create time — so a fresh container comes up on its
-      # declared internal_ip with no `sk bootstraps container` step. (Was
+      # declared internal_ip with no separate bootstrap step at all. (Was
       # "unmanaged", under which PVE wrote no network config and the CT
       # fell back to DHCP.) Custom Debian/Ubuntu images keep their own
       # ostype; any other custom image stays "unmanaged".
       lxcOsType =
         if !hasCustomImage then "nixos"
+        # A consumer's OWN NixOS template (e.g. a nixos-generators
+        # proxmox-lxc image on local:) is still ostype nixos — PVE's
+        # NixOS setup plugin then writes the static IP at create time,
+        # same as the fleet template path.
+        else if lib.hasInfix "nixos" lxcTemplateFile then "nixos"
         else if lib.hasInfix "debian" lxcTemplateFile then "debian"
         else if lib.hasInfix "ubuntu" lxcTemplateFile then "ubuntu"
         else "unmanaged";
@@ -331,7 +370,10 @@ in rec {
       # inject via initialization.user_account so the operator can SSH
       # in immediately after first boot. Hostname is also set so the
       # LXC reports its name to DHCP / chrony / etc.
-      initConfig = lib.optionalAttrs hasCustomImage {
+      # NixOS images (fleet template OR a consumer's own) bake their
+      # operator key into the image; injecting user_account here too
+      # would only create import-parity drift on existing containers.
+      initConfig = lib.optionalAttrs (hasCustomImage && lxcOsType != "nixos") {
         initialization = {
           hostname = name;
           user_account = {

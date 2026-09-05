@@ -85,25 +85,39 @@ def framework_modules_dir() -> Path | None:
     return None
 
 
-def module_playbooks() -> dict[str, Path]:
-    """Discover module-adjacent playbooks in the framework modules tree.
+def module_playbooks(root: Path | None = None) -> dict[str, Path]:
+    """Discover module-adjacent playbooks — consumer AND framework modules.
 
     Some operational playbooks live next to the NixOS module they service
     (e.g. nix/modules/infra/build/attic/attic-rebootstrap.yml next to
-    its module) rather than in ansible/playbooks/. Any ``*.yml`` under
-    nix/modules/ whose name looks like a playbook slug (lowercase,
-    digits, hyphens) is resolvable by its bare stem. Lowest precedence:
-    consumer playbooks and the framework ansible/playbooks/ tree both win
-    on a name collision.
+    its module; a consumer's nix/modules/infisical/ansible/*.yml next to
+    its infisical module) rather than in ansible/playbooks/. Any ``*.yml``
+    under either nix/modules/ tree whose name looks like a playbook slug
+    (lowercase, digits, hyphens) is resolvable by its bare stem. Within
+    this tier the CONSUMER tree wins a name collision; the whole tier is
+    lowest precedence — consumer ansible/playbooks/ and the framework
+    ansible/playbooks/ tree both win over it. A playbook-adjacent roles/
+    directory resolves naturally (standard Ansible behaviour), so a
+    module-adjacent play carries its roles with it.
     """
     import re
-    mods = framework_modules_dir()
-    if mods is None:
-        return {}
+    trees: list[Path] = []
+    if root is not None and (root / "nix" / "modules").is_dir():
+        trees.append(root / "nix" / "modules")
+    if (mods := framework_modules_dir()) is not None:
+        trees.append(mods)
     out: dict[str, Path] = {}
-    for p in sorted(mods.rglob("*.yml")):
-        if re.fullmatch(r"[a-z][a-z0-9-]*", p.stem):
-            out.setdefault(p.stem, p)
+    # A module-adjacent play's roles/ ride along beside it — their
+    # internal task/handler/defaults files are NOT playbooks and must
+    # not pollute name resolution.
+    skip_parents = {"roles", "tasks", "handlers", "defaults", "vars",
+                    "templates", "files", "meta"}
+    for tree in trees:
+        for p in sorted(tree.rglob("*.yml")):
+            if skip_parents & set(p.relative_to(tree).parts[:-1]):
+                continue
+            if re.fullmatch(r"[a-z][a-z0-9-]*", p.stem):
+                out.setdefault(p.stem, p)
     return out
 
 
@@ -264,7 +278,7 @@ def _resolve_playbook(root: Path, name: str) -> Path | None:
     for c in candidates:
         if c.is_file():
             return c
-    mod = module_playbooks().get(name.removesuffix(".yml"))
+    mod = module_playbooks(root).get(name.removesuffix(".yml"))
     if mod is not None and mod.is_file():
         return mod
     return None
@@ -322,7 +336,7 @@ def playbooks_cmd():
             seen.add(rel)
             rows.append((rel, origin))
     # Module-adjacent playbooks (lowest precedence on name collision).
-    for name in sorted(module_playbooks()):
+    for name in sorted(module_playbooks(root)):
         if name in seen:
             continue
         seen.add(name)
@@ -383,7 +397,14 @@ def run_cmd(playbook: str, limit: str | None, tags: str | None, check: bool,
                 break
     env.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
 
-    cmd = ["ansible-playbook", "-i", str(inv), str(resolved)]
+    cmd = ["ansible-playbook", "-i", str(inv)]
+    # Chain the consumer's inventory dir (group_vars/ + host_vars/ +
+    # static.yml) AFTER the generated inventory — explicit -i flags
+    # override $ANSIBLE_INVENTORY, so the chaining must happen here too;
+    # later sources win merges, so consumer data prevails.
+    if (consumer_inv := root / "ansible" / "inventory").is_dir():
+        cmd += ["-i", str(consumer_inv)]
+    cmd.append(str(resolved))
     if limit:
         cmd += ["--limit", limit]
     if tags:

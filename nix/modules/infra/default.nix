@@ -20,8 +20,6 @@
 
     # Compatibility shims: every pre-strata option path (infra.caddy,
     # infra.sssd, infra.builder.*, …) is aliased onto its new home and
-    # warns on use. Remove after consumers migrate.
-    ./compat.nix
 
     # ── infra.network — fleet-facing network services ──
     ./network/dns # CoreDNS internal zone (infra.network.dns)

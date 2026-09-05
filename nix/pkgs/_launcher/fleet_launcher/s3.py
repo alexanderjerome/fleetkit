@@ -19,7 +19,7 @@ import sys
 import click
 from rich.console import Console
 
-from ._util import find_project_root, fleet_cache_dir, sk_executable
+from ._util import find_project_root, fleet_cache_dir, fleet_executable
 
 console = Console()
 
@@ -189,7 +189,7 @@ def mint_key(key_name: str, bucket: str, sops_prefix: str, rotate: bool,
     ]
     for path, value in payload:
         sk_res = subprocess.run(
-            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
+            [fleet_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
         if sk_res.returncode != 0:

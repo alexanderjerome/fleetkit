@@ -15,9 +15,18 @@
 #   # Service with extra ports (all opened in firewall):
 #   infra.services.auth = {
 #     port = cfg.serverPort;
-#     extraPorts = [ { port = cfg.httpsPort; protocol = "https"; } ];
+#     extraPorts = [ { port = cfg.httpsPort; protocol = "https"; name = "https"; } ];
 #     description = "Authentik identity provider";
 #     category = "platform";
+#   };
+#
+#   # Several addressable ports — name them, or a generated .env cannot
+#   # tell them apart:
+#   infra.services.rabbitmq = {
+#     port = cfg.amqpPort;                       # the primary, exported as PORT
+#     extraPorts = [ { port = cfg.mgmtPort; name = "mgmt"; protocol = "http"; } ];
+#     description = "Message broker";
+#     category = "data";
 #   };
 #
 #   # Internal-only (no Caddy):
@@ -96,6 +105,22 @@ in
               port = mkOption {
                 type = types.port;
                 description = "Additional port to open in the firewall.";
+              };
+              name = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "mgmt";
+                description = ''
+                  Short label for this port, distinguishing it from the
+                  service's other ports. Consumed by generated env files and
+                  the service catalog: a service with several ports otherwise
+                  exports a single ambiguous PORT, which is useless to anyone
+                  wiring an application against it (RabbitMQ's AMQP 5672 and
+                  management 15672 are the obvious case).
+
+                  null keeps the port firewall-only and unnamed — fine for a
+                  metrics or gRPC port nothing external configures against.
+                '';
               };
               ui = mkOption {
                 type = types.bool;

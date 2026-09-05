@@ -49,10 +49,9 @@ in
   # Merge host/cluster definitions with the fleet-runtime manifest.
   #
   # hosts:    { name -> config-attrset | module-function }  — from
-  #                                                            fleetEval.hostsRegistry
-  #                                                            (SKRYBITDEV-628). Functions
-  #                                                            accept (config, lib, pkgs,
-  #                                                            helpers, ...).
+  #                                                            fleetEval.hostsRegistry.
+  #                                                            Functions accept (config,
+  #                                                            lib, pkgs, helpers, ...).
   # clusters: { clusterName -> (h -> config-attrset) }      — optional; was nix/clusters.nix, removed when no clusters were active
   # runtime:  { name -> flat-or-rich-entry }                 — from
   #                                                            fleetEval.hostsJson
@@ -85,13 +84,22 @@ in
           hostname = _hostname rt name;
           modules = [
             helpersModule
-            (if builtins.isFunction hostConfig then hostConfig else ({ ... }: hostConfig))
+            # A registry entry may be a module FUNCTION, a PATH/string to
+            # a module file (v2 `nixos = ./cfg/host.nix` facets), or a
+            # plain attrset. Paths must pass through untouched — wrapping
+            # one as ({...}: path) hands the module system a function
+            # returning a path, which it rejects far away from here.
+            (if builtins.isFunction hostConfig
+                || builtins.isPath hostConfig
+                || builtins.isString hostConfig
+             then hostConfig
+             else ({ ... }: hostConfig))
           ] ++ nixpkgs.lib.optional (internalIp != "") ({ ... }: {
             infra.networking.internalIp = internalIp;
           }) ++ nixpkgs.lib.optional ((internalIp != "") != (ip != "")) ({ ... }: {
             # Single-NIC host (exactly one of ip/internal_ip set).
             # Covers both the internal-only common case and ip-only
-            # vmbr0-attached hosts (SKRYBITDEV-611).
+            # vmbr0-attached hosts.
             infra.networking.singleInterface = true;
           }) ++ nixpkgs.lib.optional (ip != "" && internalIp == "") ({ ... }: {
             # vmbr0-only single-NIC host: feed the LAN IP into core.nix
@@ -153,19 +161,32 @@ in
     standaloneHosts // clusterHosts;
 
   # Build nixosConfigurations from the hosts attrset.
-  mkNixosConfigurations = { hosts, globalModules ? [] }:
+  mkNixosConfigurations = { hosts, globalModules ? [], specialArgs ? {} }:
     builtins.mapAttrs (_name: h:
       nixpkgs.lib.nixosSystem {
+        inherit specialArgs;
         modules = globalModules ++ h.modules ++ [
           ({ ... }: {
-            nixpkgs.hostPlatform = "x86_64-linux";
-            networking.hostName = h.hostname;
-            # Colmena injects `nodes` (the whole hive) via specialArgs;
-            # this plain-nixosSystem path has no hive, so give modules
-            # that consume `nodes` (e.g. nix/modules/infra/data/pgweb) an empty
-            # one. Colmena's eval never sees this module, so there is
-            # no conflict with the real value.
-            _module.args.nodes = {};
+            # Colmena declares `deployment.*`; accept (and discard) it
+            # here so host modules may set colmena-only knobs
+            # (buildOnTarget, keys, …) without breaking the
+            # plain-nixosSystem eval path.
+            options.deployment = nixpkgs.lib.mkOption {
+              type = nixpkgs.lib.types.attrsOf nixpkgs.lib.types.raw;
+              default = {};
+              internal = true;
+              description = "Colmena deployment options — inert in plain nixosConfigurations.";
+            };
+            config = {
+              nixpkgs.hostPlatform = "x86_64-linux";
+              networking.hostName = h.hostname;
+              # Colmena injects `nodes` (the whole hive) via specialArgs;
+              # this plain-nixosSystem path has no hive, so give modules
+              # that consume `nodes` (e.g. nix/modules/infra/data/pgweb) an
+              # empty one. Colmena's eval never sees this module, so there
+              # is no conflict with the real value.
+              _module.args.nodes = {};
+            };
           })
         ];
       }

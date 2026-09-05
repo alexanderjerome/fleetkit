@@ -46,7 +46,7 @@ nixpkgsLib.nixosSystem {
     # process needing the store hangs. Collapsing to a single disk
     # (xvda holds ESP + / which contains /nix) removes the failure
     # surface entirely. Disk growth is operator-driven via
-    # `sk xoa resize-disk` (per `mkXoLifecycle` ignore_changes on
+    # `fleet xoa resize-disk` (per `mkXoLifecycle` ignore_changes on
     # disk size).
     ({ ... }: {
       disko.devices = {

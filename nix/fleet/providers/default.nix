@@ -1,6 +1,6 @@
 { lib, ... }:
 
-# Provider & instance registry (SKRYBITDEV-599 schema v2) — schema only.
+# Provider & instance registry (schema v2) — schema only.
 #
 # Each entry describes HOW to talk to one physical provider endpoint.
 # Resources in fleet.compute / fleet.resources reference these via
@@ -13,8 +13,34 @@
 # Values are supplied by the consumer repo (fleetkit is schema-only here).
 
 let
+  v2 = import ../v2-types.nix { inherit lib; };
+
   providerInstanceType = lib.types.submodule ({ name, ... }: {
     options = {
+      # ── ADR-096: the provider-rooted resource tree ────────────────
+      # Machines and provider-scoped objects may be authored HERE, in
+      # place, instead of in the flat fleet.compute / fleet.resources
+      # namespaces. v2-normalize.nix lifts everything declared here into
+      # those flat options, so every emitter, validator and projection
+      # keeps working unchanged — the flat layer is becoming the derived
+      # normal form rather than the authoring surface.
+      nodes = lib.mkOption {
+        type = lib.types.attrsOf v2.nodeType;
+        default = {};
+        description = "Hypervisor members of this instance, as typed objects (mgmt_ip, placed machines). Complements cluster.nodes (names only); a name present in either counts as a member.";
+      };
+      resources = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = lib.types.attrsOf v2.looseKind;
+          options = {
+            lxc = lib.mkOption { type = v2.machines; default = {}; description = "Instance-scoped containers (single-node instances; multi-node clusters place under nodes.<n>)."; };
+            vm  = lib.mkOption { type = v2.machines; default = {}; description = "Instance-scoped VMs (XO VMs are pool-placed, so they belong here)."; };
+          };
+        };
+        default = {};
+        description = "Provider-scoped resources by kind — pools/acls/zones/checks per this provider's kind map (v2-types.nix), plus lxc/vm.";
+      };
+
       source = lib.mkOption {
         type = lib.types.str;
         example = "bpg/proxmox";
@@ -137,7 +163,46 @@ let
       };
     };
   };
+  # ── Fleet namespaces (ADR-097) ─────────────────────────────────
+  # A named fleet is an additional provider forest over the SAME estate
+  # substrate: its resources lift into the flat layer like top-level
+  # ones, tagged fleet_ns = <name>, and its stacks enumerate as
+  # <name>.<env>.<stack> — which namespaces the tofu state key
+  # (tf/<name>-<env>-<stack>/) inside the shared bucket and gives the
+  # CLI's dot-path prefix matching per-fleet selection for free.
+  # The TOP-LEVEL fleet.providers tree is the incumbent/default fleet:
+  # unprefixed stacks, legacy state keys, no migration (ADR-097).
+  # Provider-instance CONFIG (endpoint, creds, nodes' mgmt_ip) belongs
+  # to the estate: declare it once at top level; a namespaced fleet's
+  # tree should carry only resources on those instances. Utility
+  # providers (random/ansible/…) are estate substrate too — top level
+  # only. Per-fleet state backend overrides (own bucket) are future
+  # work; see the ADR.
+  fleetNamespaceType = lib.types.submodule {
+    options = {
+      description = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "What / whose namespace this is (shown in docs projections).";
+      };
+      providers = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.attrsOf providerInstanceType);
+        default = {};
+        description = "Provider forest of this fleet: <family>.<instance>[.nodes.<node>].resources.<kind>.<name>, same shape as the top-level tree.";
+      };
+    };
+  };
+
 in {
+  options.fleet.fleets = lib.mkOption {
+    type = lib.types.attrsOf fleetNamespaceType;
+    default = {};
+    example = lib.literalExpression ''
+      { jeirslab.providers.proxmox.main.nodes.pve1.resources.lxc.foo = { vm_id = 9101; }; }
+    '';
+    description = "Named fleet namespaces sharing this estate's substrate (ADR-097).";
+  };
+
   options.fleet.providers = {
     proxmox = lib.mkOption {
       type = lib.types.attrsOf providerInstanceType;
@@ -215,7 +280,7 @@ in {
       description = ''
         ansible/ansible — runs ansible-playbook from a terraform resource
         (ansible_playbook). Used to chain post-install Ansible against
-        compute resources tofu just created, so `sk deploy tf apply` does
+        compute resources tofu just created, so `fleet deploy tf apply` does
         the whole "create the host + converge its config" cycle in one
         shot. The provider runs `ansible-playbook` locally on whoever
         runs tofu, so SSH key + inventory must be reachable there.

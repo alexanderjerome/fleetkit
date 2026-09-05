@@ -20,7 +20,7 @@ import time
 import click
 from rich.console import Console
 
-from ._util import find_project_root, fleet_cache_dir, sk_executable
+from ._util import find_project_root, fleet_cache_dir, fleet_executable
 from .pve_api import get_host as get_pve_host
 
 console = Console()
@@ -197,13 +197,13 @@ proxmox-backup-manager user generate-token {username} {token_id}
 
     for path, value in [(f"{sops_prefix}/endpoint", endpoint),
                         (f"{sops_prefix}/api_token", api_token)]:
-        sk_res = subprocess.run(
-            [sk_executable(), "devtools", "secrets", "keys", "add", path, value],
+        save_res = subprocess.run(
+            [fleet_executable(), "devtools", "secrets", "keys", "add", path, value],
             capture_output=True, text=True, check=False,
         )
-        if sk_res.returncode != 0:
-            console.print(f"[red]Failed to save {path}[/]: {sk_res.stderr.strip()}")
-            sys.exit(sk_res.returncode)
+        if save_res.returncode != 0:
+            console.print(f"[red]Failed to save {path}[/]: {save_res.stderr.strip()}")
+            sys.exit(save_res.returncode)
         console.print(f"  ✓ wrote SOPS: [cyan]{path}[/]")
 
     console.print()
@@ -280,7 +280,7 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
         return
 
     excl = "".join(f" --exclude-path {p}" for p in exclude_paths)
-    unit = f"sk-backup-{vmid}"
+    unit = f"fleet-backup-{vmid}"
     logfile = f"/var/log/{unit}.log"
     vzcmd = (f"vzdump {vmid} --storage {storage} --mode {mode} "
              f"--notes-template '{notes}'{excl}")
@@ -291,7 +291,7 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
     launch = (
         f"systemctl reset-failed {unit} 2>/dev/null; "
         f"systemd-run --unit={unit} --service-type=oneshot bash -c "
-        f"'{vzcmd} > {logfile} 2>&1; echo SK_BACKUP_EXIT=$? >> {logfile}'"
+        f"'{vzcmd} > {logfile} 2>&1; echo FLEET_BACKUP_EXIT=$? >> {logfile}'"
     )
     console.print(f"[dim]{node_ip}: launching {unit} (detached)[/dim]")
     r = _ssh(node_ip, launch)
@@ -304,13 +304,16 @@ def backup(host_name: str, storage: str, mode: str, exclude_paths: tuple[str, ..
     exit_code = None
     while exit_code is None:
         res = _ssh(node_ip,
-                   f"grep -q SK_BACKUP_EXIT {logfile} && tail -4 {logfile} || tail -1 {logfile}")
+                   # `SK_` alternate: tolerate a backup still in flight that was
+                   # launched by a pre-INFRA-218 build. Drop with the env shim.
+                   f"grep -qE '(FLEET|SK)_BACKUP_EXIT' {logfile} "
+                   f"&& tail -4 {logfile} || tail -1 {logfile}")
         out = (res.stdout or "").strip()
         line = out.splitlines()[-1] if out else ""
         if line and line != last:
             console.print(f"  {line}")
             last = line
-        m = re.search(r"SK_BACKUP_EXIT=(\d+)", out)
+        m = re.search(r"(?:FLEET|SK)_BACKUP_EXIT=(\d+)", out)
         if m:
             exit_code = int(m.group(1))
             break

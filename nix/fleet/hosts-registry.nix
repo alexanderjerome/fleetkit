@@ -1,6 +1,6 @@
 { lib, ... }:
 
-# Per-host NixOS module dispatcher (SKRYBITDEV-628 refactor).
+# Per-host NixOS module dispatcher.
 #
 # Each entry under nix/hosts/**/<name>.nix contributes a module function
 # here AND its terranix fleet.compute entry. `mkHosts` (nix/lib/) reads

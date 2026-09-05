@@ -28,7 +28,7 @@ input and describe their fleet as data.
 3. **Every option carries a description** — the `docs` check fails otherwise.
    Descriptions are static strings; never interpolate config values into them.
 4. **No site-specific literals in framework code.** Site values live behind
-   `fleet.settings.*` / `fleet.network.*` (Nix), `fleet.toml` (CLI), or
+   `fleet.settings.*` / `fleet.network.*` (Nix, projected to the CLI catalog), or
    ansible variables named after their settings counterparts. No company or
    personal defaults — options are either generically defaulted or required
    only when the consuming feature is enabled.

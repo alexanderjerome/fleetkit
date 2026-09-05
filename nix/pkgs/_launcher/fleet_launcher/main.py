@@ -150,11 +150,26 @@ def _ensure_sops_age_key() -> None:
         os.environ["SOPS_AGE_KEY_FILE"] = key_file
 
 
+def _setenv_if_blank(name: str, value) -> None:
+    """Set an env var unless it already holds a NON-EMPTY value.
+
+    `os.environ.setdefault` is wrong here: a devshell that pre-exports
+    placeholders (PROXMOX_VE_ENDPOINT="" and friends) satisfies setdefault,
+    so the value decrypted from SOPS is silently discarded and the caller
+    later fails with "not set" about a variable that is, in fact, set — to
+    nothing. Precedence is unchanged: a real value already in the
+    environment still wins.
+    """
+    import os  # `os` is imported inside _setup_env, not at module scope
+    if not os.environ.get(name):
+        os.environ[name] = str(value)
+
+
 def _setup_env() -> None:
     """Load .env and populate the env vars our tools consume.
 
     Sets:
-      - AWS_* (credentials for the tofu S3 state backend; bucket from fleet.toml)
+      - AWS_* (credentials for the tofu S3 state backend; bucket from fleet.settings.backend)
       - PROXMOX_VE_* (terranix Proxmox provider credentials)
 
     All values come from SOPS (`nix/secrets/secrets.yaml`). Works both
@@ -204,9 +219,22 @@ def _setup_env() -> None:
             os.environ.setdefault("ANSIBLE_CONFIG", str(cfg))
             break
     from ._util import fleet_cache_dir
-    os.environ.setdefault(
-        "ANSIBLE_INVENTORY", str(fleet_cache_dir(root) / "ansible-inventory.yml"))
+    # Inventory: the GENERATED manifest-derived inventory first, then the
+    # consumer's ansible/inventory/ directory when it exists — that is
+    # where a consumer keeps group_vars/ + host_vars/ (+ a static.yml for
+    # out-of-manifest boxes), and ansible only loads those var dirs from
+    # inventory (or playbook) locations. Later sources win merges, so
+    # consumer data overrides generated groups on conflict.
+    inventory_sources = [str(fleet_cache_dir(root) / "ansible-inventory.yml")]
+    if (consumer_ansible / "inventory").is_dir():
+        inventory_sources.append(str(consumer_ansible / "inventory"))
+    os.environ.setdefault("ANSIBLE_INVENTORY", ",".join(inventory_sources))
     os.environ.setdefault("ANSIBLE_HOST_KEY_CHECKING", "False")
+    # Stable anchor for consumer inventory vars: with chained inventories
+    # ansible's inventory_dir is ambiguous (it names the source of the
+    # CURRENT host — usually the generated file's dir), so group_vars
+    # path values anchor on this instead: lookup('env','FLEET_REPO_ROOT').
+    os.environ.setdefault("FLEET_REPO_ROOT", str(root))
     os.environ.setdefault(
         "TF_PLUGIN_CACHE_DIR",
         os.path.expanduser("~/.cache/opentofu/plugin-cache"))
@@ -221,7 +249,11 @@ def _setup_env() -> None:
     if not sops:
         return
 
-    from .config import secrets_file as _cfg_secrets
+    # Provider credentials (integrations.*) may live in a different SOPS file
+    # from the NixOS default — see config.integrations_file(). Reading the
+    # wrong one fails SILENTLY below (`except: pass`), which is how a split
+    # store presented as "No valid credential sources found" for days.
+    from .config import integrations_file as _cfg_secrets
     secrets_file = str(_cfg_secrets())
 
     # AWS credentials for the tofu S3 state backend.
@@ -232,9 +264,35 @@ def _setup_env() -> None:
         if result.returncode == 0:
             import yaml
             aws = yaml.safe_load(result.stdout)
-            os.environ.setdefault("AWS_ACCESS_KEY_ID", aws["access_key_id"])
-            os.environ.setdefault("AWS_SECRET_ACCESS_KEY", aws["secret_access_key"])
-            os.environ.setdefault("AWS_DEFAULT_REGION", aws["region"])
+            _setenv_if_blank("AWS_ACCESS_KEY_ID", aws["access_key_id"])
+            _setenv_if_blank("AWS_SECRET_ACCESS_KEY", aws["secret_access_key"])
+            _setenv_if_blank("AWS_DEFAULT_REGION", aws["region"])
+    except Exception:
+        pass
+
+    # Postgres state backend: OpenTofu reads PG_CONN_STR from the
+    # environment. Kept out of config.tf.json deliberately — that file is
+    # built by Nix into the world-readable store, so a password in the backend
+    # block would be exposed to every user on every machine that builds it.
+    try:
+        from .config import get as _cfg_get
+        pg_path = _cfg_get("backend_pg.conn_str_sops_path")
+        if pg_path:
+            # The sops path names its own tree — ["dbs"]["tofu-db"]… — so
+            # route on that rather than assuming the integrations file. A
+            # connection string lives with the databases, not the provider
+            # credentials, and guessing here fails SILENTLY: the extract
+            # returns non-zero, the except swallows it, and tofu later reports
+            # a missing backend credential with no hint as to why.
+            import re as _re
+            from .config import file_for as _file_for
+            m_tree = _re.match(r'\["([^"]+)"\]', pg_path)
+            pg_file = str(_file_for(m_tree.group(1))) if m_tree else secrets_file
+            result = subprocess.run(
+                [sops, "-d", "--extract", pg_path, pg_file],
+                capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                _setenv_if_blank("PG_CONN_STR", result.stdout.strip())
     except Exception:
         pass
 
@@ -250,11 +308,14 @@ def _setup_env() -> None:
                 "endpoint": "PROXMOX_VE_ENDPOINT",
                 "username": "PROXMOX_VE_USERNAME",
                 "password": "PROXMOX_VE_PASSWORD",
+                # user@realm!token=uuid form — bpg's token auth; preferred
+                # over username/password where both are present.
+                "api_token": "PROXMOX_VE_API_TOKEN",
             }
             for key, env_var in mapping.items():
                 if key in pve:
-                    os.environ.setdefault(env_var, str(pve[key]))
-        os.environ.setdefault("PROXMOX_VE_INSECURE", "true")
+                    _setenv_if_blank(env_var, pve[key])
+        _setenv_if_blank("PROXMOX_VE_INSECURE", "true")
     except Exception:
         pass
 
@@ -279,10 +340,10 @@ def _setup_env() -> None:
             else:
                 rest_url = ws_url
             rest_url = rest_url.rstrip("/")
-            os.environ.setdefault("XOA_URL", rest_url)
+            _setenv_if_blank("XOA_URL", rest_url)
             if "token" in xoa:
-                os.environ.setdefault("XOA_TOKEN", str(xoa["token"]))
-        os.environ.setdefault("XOA_INSECURE", "true")
+                _setenv_if_blank("XOA_TOKEN", xoa["token"])
+        _setenv_if_blank("XOA_INSECURE", "true")
     except Exception:
         pass
 
@@ -297,13 +358,14 @@ def _maybe_reexec_for_missing_tools() -> None:
     PATH, transparently re-exec this same fleet binary through `nix develop`
     so both halves are present.
 
-    Opt-out: SK_NO_REEXEC=1. Loop guard: SK_REEXECED=1.
+    Opt-out: FLEET_NO_REEXEC=1. Loop guard: FLEET_REEXECED=1.
     """
     import os
     import shutil
     import sys
 
-    if os.environ.get("SK_NO_REEXEC") == "1" or os.environ.get("SK_REEXECED") == "1":
+    from ._util import env_get
+    if env_get("FLEET_NO_REEXEC") == "1" or env_get("FLEET_REEXECED") == "1":
         return
 
     argv = sys.argv[1:]
@@ -320,20 +382,20 @@ def _maybe_reexec_for_missing_tools() -> None:
             f"and `nix` unavailable to re-enter the devshell — this will fail.\n")
         return
 
-    from ._util import find_project_root, sk_executable
+    from ._util import find_project_root, fleet_executable
     root = find_project_root()
     sys.stderr.write(
         f"fleet: {', '.join(missing)} not on PATH — re-entering devshell "
         f"(nix develop {root})…\n")
-    os.environ["SK_REEXECED"] = "1"
+    os.environ["FLEET_REEXECED"] = "1"
     os.execvp("nix", ["nix", "develop", str(root), "--command",
-                      sk_executable(), *argv])
+                      fleet_executable(), *argv])
 
 
 def main() -> None:
     _maybe_reexec_for_missing_tools()
     _setup_env()
-    # Consumer command groups from the repo's cli-ext/ (fleet.toml [cli]).
+    # Consumer command groups from the repo's cli-ext/ (fleet.settings.cli.extensionsDir).
     from .config import load_extensions
     load_extensions(fleet)
     fleet()

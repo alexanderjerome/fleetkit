@@ -20,7 +20,7 @@
 # installer: sshd up on first boot, root authorized_keys
 # pre-loaded with the sysadmin pubkey, networkd DHCP on
 # eth*/en*, xe-guest-utilities so XOA reports the DHCP'd IP back
-# via the REST API (which `sk inventory generate` already
+# via the REST API (which `fleet inventory generate` already
 # patches into hosts.json).
 #
 # Lifecycle: build, upload to the NFS ISO Library SR ONCE, then
@@ -65,7 +65,7 @@ let
 
         # ── Xen-side IP visibility ────────────────────────────────
         # So XOA's REST API populates `addresses` for the installer
-        # VM and `sk inventory generate` can hand us its DHCP'd
+        # VM and `fleet inventory generate` can hand us its DHCP'd
         # WAN IP. Without this, we'd be stuck reading the IP off
         # the XOA console manually.
         services.xe-guest-utilities.enable = true;

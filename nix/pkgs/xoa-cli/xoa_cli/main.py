@@ -1,8 +1,8 @@
 """xoa-cli — Xen Orchestra operator CLI (INFRA-172).
 
-Standalone split of the sk launcher's `sk xoa` group, packaged as a nix
+Standalone split of the fleet launcher's `fleet xoa` group, packaged as a nix
 application (nix/pkgs/xoa-cli) so nix config / fleet tooling / the future
-MCP endpoint (INFRA-166) can call it directly. `sk xoa …` remains a thin
+MCP endpoint (INFRA-166) can call it directly. `fleet xoa …` remains a thin
 shim over this package.
 
 Reads go over the XO REST API; mutations go over the JSON-RPC websocket

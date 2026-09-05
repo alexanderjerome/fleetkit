@@ -6,7 +6,6 @@
   #   flake.nix        — this file: mkFleet wiring + output re-export
   #   fleet/           — YOUR manifest: settings, providers, network,
   #                      users, dns data, and one file per host
-  #   fleet.toml       — CLI-side settings (bucket, domains, key paths)
   #   nix/secrets/     — SOPS store (create with `sops nix/secrets/secrets.yaml`)
 
   inputs = {
@@ -19,10 +18,8 @@
     fleet = fleetkit.lib.mkFleet {
       # Everything environment-specific enters through these arguments.
       modules = [ ./fleet ];
-      backend = {
-        bucket = "REPLACE-ME-tofu";     # S3(-compatible) tofu state bucket
-        # region = "us-east-1";
-      };
+      # Tofu state backend comes from fleet.settings.backend (ADR-097) —
+      # declared with the rest of your settings, not here.
       # NixOS modules applied to every host — app flakes, sops defaults,
       # module-args. Start empty.
       globalModules = [ ];

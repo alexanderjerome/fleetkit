@@ -12,5 +12,6 @@
   imports = [
     ./core
     ./fleet-member.nix
+    ./secrets-projection.nix   # fleet.secrets → sops.secrets (ADR-096 A5)
   ];
 }

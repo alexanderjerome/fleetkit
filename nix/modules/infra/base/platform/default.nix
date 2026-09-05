@@ -38,7 +38,7 @@
 
   # ── Auto-grow disks on VM platforms ────────────────────────────
   # Fleet-wide policy: any disk declared on a VM (PVE QEMU or XCP-ng)
-  # should be non-destructively grow-able. After `sk xoa resize-disk`
+  # should be non-destructively grow-able. After `fleet xoa resize-disk`
   # or PVE-side disk grow, the next boot expands both the partition
   # (if there is one) and the filesystem to fill the new capacity.
   #

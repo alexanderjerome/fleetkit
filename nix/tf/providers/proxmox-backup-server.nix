@@ -11,7 +11,7 @@
 #                     (or alternatively username + password)
 #   * insecure      — skip TLS verify (we use the internal step-ca cert)
 #
-# Token minted + saved by `sk pbs issue-tf-token`. Path:
+# Token minted + saved by `fleet pbs issue-tf-token`. Path:
 # integrations/pbs/<instance>/api_token.
 
 let

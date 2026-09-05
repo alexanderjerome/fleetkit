@@ -3,8 +3,8 @@
 # Schema for fleet.resources — non-OS-carrying primitives (bridges,
 # pools, ACLs, DNS, file uploads, XO data sources, Cloudflare zones).
 #
-# SKRYBITDEV-628 refactor: this file holds ONLY the schema. Entries
-# moved to:
+# This file holds ONLY the schema — an earlier refactor moved the
+# entries themselves out to:
 #   - nix/hosts/xoa/resources.nix          — XO pool, networks, SRs, templates
 #   - nix/hosts/pve/resources.nix   — proxmox.dev pools / ACLs /
 #                                            bridges / DNS / files / snippets

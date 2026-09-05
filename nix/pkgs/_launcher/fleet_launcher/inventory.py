@@ -20,7 +20,7 @@ console = Console()
 def _classifier_networks():
     """(lan_net, internal_net) used to classify agent-reported IPv4s.
 
-    Read from fleet.toml — [network] lan_cidr / internal_cidr. Either
+    Read from the fleet catalog — network.lan_cidr / internal_cidr. Either
     may be None (key unset); classification then falls back to
     "first IP wins" for that bucket.
     """
@@ -239,6 +239,12 @@ def generate_hosts_json(*, offline: bool = False, quiet: bool = False) -> Path:
     backup_file = backup_dir / f"hosts.{timestamp}.json"
     backup_file.write_text(output)
 
+    # Refresh the CLI catalog alongside (ADR-097) — same source eval,
+    # already warm, so this is nearly free here and keeps the two
+    # projections aging together.
+    from .config import CATALOG_RELPATH, _materialize_catalog
+    _materialize_catalog(root, root / CATALOG_RELPATH)
+
     return hosts_file
 
 
@@ -356,7 +362,7 @@ def diff():
 @inventory.command("scan")
 @click.option("--subnet", default=None,
               help="CIDR subnet to scan (default: [network].internal_cidr "
-                   "from fleet.toml).")
+                   "from the fleet catalog).")
 @click.option("--workers", default=100,
               help="Maximum number of parallel ping workers (default: 100).")
 def scan(subnet: str | None, workers: int):

@@ -43,7 +43,7 @@ let
       git reset --hard "origin/${cfg.branch}"
       git -c credential.helper="$cred" submodule update --init --recursive
       # The out-link doubles as a GC root between runs.
-      nix build .#wiki-site --out-link "$base/result"
+      nix build ".#${cfg.siteFlakeAttr}" --out-link "$base/result"
       echo "built $(readlink -f "$base/result") — publishing to ${cfg.target}:${cfg.targetDir}"
       rsync -rlpt --delete "$base/result"/ "${cfg.target}:${cfg.targetDir}/"
       echo "published"
@@ -76,6 +76,13 @@ in
       type = types.str;
       default = "/var/lib/wiki/site";
       description = "Directory the docs host serves the handbook from.";
+    };
+
+    siteFlakeAttr = mkOption {
+      type = types.str;
+      default = "wiki-site";
+      example = "docs-site";
+      description = "Flake package attribute that builds the static handbook site in the consumer repo.";
     };
 
     schedule = mkOption {

@@ -55,7 +55,7 @@ groups from fleet metadata:
 
 Every host gets `ansible_host=<ip or internal_ip>`; hosts with neither
 are skipped. `all` vars carry `ansible_user=root` and the operator key
-from `fleet.toml [ssh] sysadmin_key_file`.
+from `$FLEET_SYSADMIN_KEY_FILE` (default `~/.ssh/sysadmin-key`).
 
 The `fleet` launcher exports `ANSIBLE_INVENTORY` pointing at the
 generated file and `ANSIBLE_ROLES_PATH` covering both this tree and any

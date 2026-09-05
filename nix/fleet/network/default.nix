@@ -119,11 +119,17 @@ in
       default = "~/.ssh/sysadmin-key";
       description = ''
         Operator-local path to the sysadmin SSH *private* key. Single source of
-        truth: the devShell (nix/shell.nix) loads it into ssh-agent and exports
-        it as SK_SYSADMIN_KEY_FILE; the terranix ansible emitter reads it as
-        ansible_ssh_private_key_file; pure-Ansible inventory reads the env var.
-        A leading `~` is expanded by each consumer (Ansible expanduser; the
-        devShell expands it for bash).
+        truth: the devShell (nix/shell.nix) loads it into ssh-agent; the
+        terranix ansible emitter (nix/tf/compute/ansible.nix) and the
+        launcher's generated inventory both read it as
+        ansible_ssh_private_key_file. A leading `~` is expanded by each
+        consumer (Ansible expanduser; the devShell expands it for bash).
+
+        The framework exports no environment variable for this. A consumer
+        with a hand-written Ansible inventory that resolves the key from the
+        environment should export it as FLEET_SYSADMIN_KEY_FILE (INFRA-218 —
+        this description previously named SK_SYSADMIN_KEY_FILE, an export
+        that only ever existed in consumer-side shell.nix, never here).
       '';
     };
 
@@ -143,7 +149,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "192.0.2.0/24";
-      description = "Internal service network CIDR (vmbr1 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
+      description = "Internal service network CIDR (vmbr1 bridge). Informational — no framework module consumes it today; consumed by the CLI catalog (ADR-097).";
     };
 
     lan_gateway = lib.mkOption {
@@ -163,7 +169,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "198.51.100.0/24";
-      description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; kept for CLI/fleet.toml parity.";
+      description = "LAN CIDR (vmbr0 bridge). Informational — no framework module consumes it today; consumed by the CLI catalog (ADR-097).";
     };
 
     # Prefix lengths appended to the BARE `internal_ip` / `ip` of the

@@ -62,9 +62,28 @@
     # contracts all keep working unchanged.
     mkFleet = {
       modules,
-      backend,
+      # Tofu state backend ({ bucket, region ? }). Optional since ADR-097:
+      # when omitted it comes from `fleet.settings.backend` — the flake
+      # stays bootstrap-only and the bucket is declared once, in Nix.
+      backend ? null,
       globalModules ? [],
       hostExtraModules ? {},
+      # Extra RAW terranix modules per stack ({ "<env>.<stack>" = [ module ]; }).
+      # The escape hatch for provider families fleetkit does not model
+      # (a router's uci provider, a one-off SaaS resource): the module is
+      # appended to that stack's terranix eval only — it never enters the
+      # fleet-schema eval, so plain `resource.*`/`provider.*` config is fine.
+      tfExtraModules ? {},
+      # Deep-merged into colmena's meta — for per-node package sets
+      # (meta.nodeNixpkgs, e.g. one CUDA host) and similar colmena-only
+      # knobs mkFleet has no first-class argument for.
+      colmenaMeta ? {},
+      # Extra specialArgs for every host eval (nixosConfigurations AND
+      # colmena). Use for values that must be visible during module
+      # IMPORT resolution — e.g. `inputs` when host modules do
+      # `imports = [ "''${inputs.nixpkgs}/nixos/modules/..." ]`.
+      # (_module.args is config-stage only; it cannot feed imports.)
+      specialArgs ? {},
       colmenaOverlays ? [],
       system ? "x86_64-linux",
       sopsAgeKeyCommand ? [ "sh" "-c" "cat \"$HOME/.ssh/sops-age.key\"" ],
@@ -80,9 +99,42 @@
 
       # Single fleet eval — the source of truth for every host's
       # vm_id / ip / internal_ip / tags / kind and the leaf stacks.
+      # fleetLib is injected into the MANIFEST eval too, not just into NixOS
+      # hosts: consumer manifest modules (Grafana Cloud checks, PVE notes)
+      # need the same builders at fleet-eval time, where no NixOS module
+      # argument exists yet.
+      fleetLib = import ./nix/lib/module-args.nix { lib = nixpkgs.lib; inherit pkgs; };
+
       fleetEval = (nixpkgs.lib.evalModules {
-        modules = [ ./nix/fleet ] ++ modules;
+        modules = [ ./nix/fleet { _module.args.fleetLib = fleetLib; } ] ++ modules;
       }).config.fleet;
+
+      # ADR-097: backend argument > fleet.settings.backend, loudly none.
+      # `perStack` rides along on both paths: nix/tf resolves it per stack,
+      # and dropping it here would silently ignore every override (the
+      # reconstruction below is explicit, so a new field must be added by
+      # hand — found the hard way).
+      backendPerStack = fleetEval.settings.backend.perStack or { };
+      backend' =
+        if backend != null then
+          { perStack = backendPerStack; } // backend
+        else if fleetEval.settings.backend.type == "local" then {
+          type = "local";
+          perStack = backendPerStack;
+        }
+        else if fleetEval.settings.backend.type == "pg" then {
+          type = "pg";
+          pgSchemaPrefix = fleetEval.settings.backend.pg.schemaPrefix;
+          perStack = backendPerStack;
+        }
+        else if fleetEval.settings.backend.bucket != null then {
+          type = "s3";
+          bucket = fleetEval.settings.backend.bucket;
+          region = fleetEval.settings.backend.region;
+          pgSchemaPrefix = fleetEval.settings.backend.pg.schemaPrefix;
+          perStack = backendPerStack;
+        }
+        else throw "mkFleet: no tofu state backend — set fleet.settings.backend.bucket (or backend.type = \"local\", or pass mkFleet { backend = ...; })";
 
       hosts =
         let
@@ -110,6 +162,11 @@
         disko.nixosModules.disko
         ./nix/modules
         ./nix/fleet
+        # fleetkit's public helper surface, so CONSUMER modules can reach the
+        # same builders framework modules use (sops secret declaration, grafana
+        # dashboards, PVE notes, …) without vendoring a copy or path-importing
+        # into this flake's store path. See nix/lib/module-args.nix.
+        { _module.args.fleetLib = fleetLib; }
       ] ++ nixpkgs.lib.optional (secretsFile != null)
         { sops.defaultSopsFile = secretsFile; }
       ++ modules ++ globalModules;
@@ -119,30 +176,43 @@
       mkTerranixStack = stackId: terranix.lib.terranixConfiguration {
         inherit system;
         modules = [ (import ./nix/tf {
-          inherit stackId backend;
+          inherit stackId fleetLib;
+          backend = backend';
           fleetModules = modules;
-        }) ];
+        }) ] ++ (tfExtraModules.${stackId} or []);
       };
 
-      leafStackIds = nixpkgs.lib.attrNames fleetEval.stacks;
+      # tfExtraModules keys are stacks too — a stack may consist solely
+      # of raw terranix modules (e.g. a router's uci config) with no
+      # fleet-schema entries behind it.
+      leafStackIds = nixpkgs.lib.unique
+        (nixpkgs.lib.attrNames fleetEval.stacks
+         ++ nixpkgs.lib.attrNames tfExtraModules);
       slugOf = id: nixpkgs.lib.replaceStrings [ "." ] [ "-" ] id;
 
       nixosConfigurations = nixLib.mkNixosConfigurations {
-        inherit hosts;
+        inherit hosts specialArgs;
         globalModules = baseGlobalModules;
       };
     in
     {
       inherit fleetEval hosts deployable nixosConfigurations;
+      # Exposed so a consumer can hand the same helper surface to code that is
+      # neither a NixOS module nor a manifest module — flake-level `nix run`
+      # utilities, for instance, which are plain imports with explicit args.
+      inherit fleetLib;
 
       fleetManifest = fleetEval.compute;
       fleetAccess   = fleetEval.access;
 
       colmena = {
-        meta.nixpkgs = import nixpkgs {
-          localSystem = system;
-          overlays = colmenaOverlays;
-        };
+        meta = {
+          nixpkgs = import nixpkgs {
+            localSystem = system;
+            overlays = colmenaOverlays;
+          };
+        } // nixpkgs.lib.optionalAttrs (specialArgs != {}) { inherit specialArgs; }
+          // colmenaMeta;
       } // nixLib.mkColmenaNodes {
         hosts = deployable;
         globalModules = baseGlobalModules;
@@ -160,12 +230,64 @@
           tf-stack-ids = pkgs.writeText "tf-stack-ids.json"
             (builtins.toJSON leafStackIds);
 
+          # The CLI catalog (ADR-097) — the generated, eval-free projection
+          # that REPLACED fleet.toml. Dotted key paths are preserved from
+          # the toml era verbatim, so fleet_launcher.config's get()/require()
+          # lookups and their call sites needed no changes. Materialized to
+          # .cache/fleet/catalog.json by the launcher (auto on first use;
+          # refreshed alongside hosts.json by `fleet inventory generate`).
+          # Operator-machine paths (age key, sysadmin key) are deliberately
+          # absent: those are conventions + FLEET_* env, not fleet facts.
+          fleet-catalog = pkgs.writeText "fleet-catalog.json" (builtins.toJSON {
+            _meta = { schema = 1; generator = "fleetkit mkFleet (ADR-097)"; };
+            fleet = {
+              name = fleetEval.settings.name;
+              ops_email = fleetEval.settings.opsEmail;
+            };
+            domains = {
+              base = fleetEval.settings.domain.base;
+              internal = fleetEval.settings.domain.internal;
+              tailnet_suffix = fleetEval.settings.domain.tailnetSuffix;
+            };
+            backend = backend';
+            network = {
+              internal_cidr = fleetEval.network.internal_cidr;
+              # Historical naming mismatch, resolved here deliberately: the
+              # CLI's `lan_cidr` classifies the hypervisor/management net
+              # (inventory NIC bucketing) = settings.network.mgmtCidr.
+              # settings.network.lanCidr MIRRORS internal_cidr (postgres
+              # ACL convenience) and must NOT feed this key.
+              lan_cidr = fleetEval.settings.network.mgmtCidr;
+            };
+            sops.secrets_file = fleetEval.settings.sopsSecretsFile;
+            # The file holding integrations.* — provider credentials. The CLI
+            # reads the same tree terranix does, so both follow one setting.
+            tf.sops_file = fleetEval.settings.tfSopsFile;
+            sops.files = fleetEval.settings.sopsFiles;
+            # Where the launcher finds PG_CONN_STR for the pg backend.
+            backend_pg.conn_str_sops_path = fleetEval.settings.backend.pg.connStrSopsPath;
+            cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
+            pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
+            pve.install = fleetEval.settings.pveInstall;
+            mcp.grafana_token_sops_path = fleetEval.settings.mcp.grafanaTokenSopsPath;
+          });
+
           # fleet.settings as JSON — read by eval-free CLI features that
           # need Nix-side settings (e.g. `fleet mcp config` deriving the
           # fleet's observability MCP endpoints). Settings hold no secret
           # VALUES (secrets are sops paths), so this is safe to build.
           settings-json = pkgs.writeText "fleet-settings.json"
             (builtins.toJSON fleetEval.settings);
+
+          # The secrets CATALOG — structure and routing only, never values:
+          # resource → file path, instances, consumers, env naming, key
+          # names. Read by `fleet secrets env-export` and sync tooling so
+          # neither needs a Nix eval of its own (nor a decryption key just
+          # to know what exists).
+          secrets-catalog-json = pkgs.writeText "fleet-secrets-catalog.json"
+            (builtins.toJSON (nixpkgs.lib.mapAttrs (_: r:
+              (removeAttrs r [ "file" ]) // { file = toString (r.file or null); })
+              fleetEval.secrets));
 
         }
         # One `tf-<env>-<stack>` package per leaf stack:
@@ -183,7 +305,11 @@
     };
 
   in
-  (flake-utils.lib.eachDefaultSystem (system:
+  # Linux-only on purpose (this is an LXC/VM fleet framework) — and
+  # eachDefaultSystem would force an x86_64-darwin nixpkgs import, which
+  # nixpkgs ≥26.11 turns into a hard eval throw for any consumer that
+  # points inputs.nixpkgs at current unstable.
+  (flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
     let
       pkgs = import nixpkgs { inherit system; };
     in {

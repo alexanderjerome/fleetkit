@@ -5,9 +5,9 @@
 
 # xoa-cli — standalone Xen Orchestra operator CLI (INFRA-172).
 #
-# Split out of the sk launcher so that (a) nix config / apply tooling can
+# Split out of the fleet launcher so that (a) nix config / apply tooling can
 # call it without dragging in the whole fleet CLI, and (b) the planned
-# MCP endpoint (INFRA-166) has a single package to consume. `sk xoa …`
+# MCP endpoint (INFRA-166) has a single package to consume. `fleet xoa …`
 # remains a thin shim over this package.
 
 python3.pkgs.buildPythonApplication {

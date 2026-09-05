@@ -186,7 +186,12 @@ def apply_all(args: tuple[str, ...], no_refresh: bool):
               help="Stage as `boot` goal and reboot the target after activation. "
                    "Required when critical components change (dbus-implementation, "
                    "kernel, init system) — NixOS refuses to switch live then.")
-def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_session: bool, reboot: bool):
+@click.option("--dry-activate", "dry_activate", is_flag=True,
+              help="Build and copy the closure, then show what activation WOULD "
+                   "do (which units restart/reload) without switching. Read-only "
+                   "on the target's running system. Mutually exclusive with --reboot.")
+def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_session: bool,
+               reboot: bool, dry_activate: bool):
     """Deploy NixOS config to one or more hosts.
 
     NAMES are Colmena node names (e.g. ``netgate build auth``).
@@ -194,21 +199,21 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
     multiple deploys can run concurrently. Inspect with:
 
       fleet sessions list
-      fleet sessions attach sk-deploy-<name>
+      fleet sessions attach fleet-deploy-<name>
 
     Use --no-session to run inline. Use --ip to override the default
     hosts.json IP.
     """
     # Auto-session dispatch: launch one tmux session per host, then
-    # return. Each session re-enters this command with SK_SESSION_NAME
+    # return. Each session re-enters this command with FLEET_SESSION_NAME
     # set so the inner copy runs inline.
-    from ._util import sk_executable
+    from ._util import env_get, fleet_executable
     from .sessions import dispatch_session, running_inside
-    if not no_session and not os.environ.get("SK_NO_SESSION"):
+    if not no_session and not env_get("FLEET_NO_SESSION"):
         dispatched_any = False
         failed: list[tuple[str, int]] = []
         for name in names:
-            session_name = f"sk-deploy-{name}"
+            session_name = f"fleet-deploy-{name}"
             if running_inside(session_name):
                 # Inner session — fall through to inline deploy below.
                 continue
@@ -216,7 +221,7 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
             # devshell PATH don't reliably carry `fleet`. If colmena is
             # missing in the session env, the inner fleet re-execs via
             # `nix develop` itself (see main._maybe_reexec_for_missing_tools).
-            inner_cmd = [sk_executable(), "deploy", "nixos", "apply", "host",
+            inner_cmd = [fleet_executable(), "deploy", "nixos", "apply", "host",
                          name, "--no-session"]
             if ip:
                 inner_cmd += ["--ip", ip]
@@ -224,6 +229,8 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
                 inner_cmd.append("--no-refresh")
             if reboot:
                 inner_cmd.append("--reboot")
+            if dry_activate:
+                inner_cmd.append("--dry-activate")
             result = dispatch_session(
                 session_name,
                 inner_cmd,
@@ -265,7 +272,19 @@ def apply_host(names: tuple[str, ...], ip: str | None, no_refresh: bool, no_sess
                 f.write("\n")
             console.print(f"[yellow]IP override:[/yellow] {name} → {ip} (was {original_ip})")
     selector = ",".join(names)
-    cmd = ["colmena", "apply", "--impure", "--on", selector]
+    # `dry-activate` is a colmena GOAL, not a flag: it builds and copies the
+    # closure, then runs the activation script in dry mode so the target
+    # reports which units would restart — without switching. The running
+    # system is untouched, which makes it the right last check before a real
+    # apply, and the reason a deploy CLI should expose it rather than making
+    # operators reach for raw colmena.
+    if dry_activate and reboot:
+        raise click.UsageError("--dry-activate and --reboot are mutually exclusive: "
+                               "a dry run does not activate, so there is nothing to reboot into.")
+    # `colmena apply [goal]` — the goal is a POSITIONAL argument to apply
+    # (build|push|switch|boot|test|dry-activate|keys), not a subcommand.
+    cmd = ["colmena", "apply", *(["dry-activate"] if dry_activate else []),
+           "--impure", "--on", selector]
     if reboot:
         cmd.append("--reboot")
     run_shell(cmd, interactive=True, log_label=f"deploy-host-{selector}")

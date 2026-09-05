@@ -33,10 +33,51 @@
 let
   pkgs = import nixpkgs { system = "x86_64-linux"; };
 
-  example = mkFleet {
-    modules = [ ../templates/minimal/fleet ];
-    backend = { bucket = "example-tofu"; };
+  # A second fleet namespace on the same estate (ADR-097): synthetic
+  # tenant sharing the example's provider instance. NOT in the template
+  # (a fresh consumer starts single-fleet); declared inline so the check
+  # suite exercises the multi-fleet lift end to end.
+  tenantModule = {
+    config.fleet.fleets.tenant2 = {
+      description = "synthetic second fleet for the check suite";
+      providers.proxmox.main.nodes.pve1.resources.lxc.tenant2-app = {
+        env = "dev"; stack = "core";
+        vm_id = 9102;
+        tags = [ "tenant2" ];
+        ip = ""; internal_ip = "192.0.2.202";
+        cpu_cores = 1; memory_mb = 256; swap_mb = 0;
+        root_disk_datastore = "local-lvm";
+        network_mode = "single-internal";
+        notes = "check-suite tenant machine";
+      };
+    };
   };
+
+  example = mkFleet {
+    modules = [ ../templates/minimal/fleet tenantModule ];
+    # No backend argument — deliberately: proves the ADR-097 fallback to
+    # fleet.settings.backend (the template declares the bucket there).
+  };
+
+  # Negative test: the SAME resource name in two fleet namespaces must be
+  # a hard eval error (names are estate-global). tryEval + deepSeq —
+  # nothing short of forcing the value would trip it (the four
+  # green-check-over-broken-code lessons).
+  collisionEval = nixpkgs.lib.evalModules {
+    modules = [
+      ./fleet
+      { _module.args.fleetLib =
+          import ./lib/module-args.nix { lib = nixpkgs.lib; inherit pkgs; }; }
+      ../templates/minimal/fleet tenantModule {
+      config.fleet.fleets.rogue.providers.proxmox.main.nodes.pve1.resources.lxc.tenant2-app = {
+        env = "dev"; stack = "core"; vm_id = 9103;
+        ip = ""; internal_ip = "192.0.2.203";
+      };
+    } ];
+  };
+  collisionCaught =
+    !(builtins.tryEval
+        (builtins.deepSeq collisionEval.config.fleet.compute true)).success;
 
   fleetPkg = pkgs.callPackage ./pkgs/_launcher { };
 
@@ -59,10 +100,55 @@ in {
     exampleToplevelDrv = builtins.unsafeDiscardOutputDependency
       example.nixosConfigurations.example.config.system.build.toplevel.drvPath;
     stackIds = example.packages.tf-stack-ids;
+    # v2 path forced end-to-end (ADR-096): the v2-authored host's closure,
+    # plus eval-time assertions on the lift. Four times on the consumer
+    # port a green check sat over broken code because nothing FORCED the
+    # value — these are all strict env attrs, so instantiating this
+    # derivation forces every one.
+    exampleV2ToplevelDrv = builtins.unsafeDiscardOutputDependency
+      example.nixosConfigurations.example-v2.config.system.build.toplevel.drvPath;
+    v2Lift = builtins.toJSON {
+      kind = example.fleetEval.compute.example-v2.kind;                      # "container"
+      node = example.fleetEval.compute.example-v2.node;                      # "pve1"
+      pi   = example.fleetEval.compute.example-v2.provider_instance;         # "proxmox.main"
+      secretHosts = example.fleetEval.secrets.example-v2.consumers.hosts;    # [ "example-v2" ]
+      sopsKey = example.nixosConfigurations.example-v2.config
+        .sops.secrets."example-v2/default/api_token".key;                    # "default/api_token"
+    };
+    # Multi-fleet lift (ADR-097): the tenant machine lands in the flat
+    # layer tagged with its namespace, its stack enumerates
+    # fleet-prefixed (⇒ namespaced state key), and a cross-namespace
+    # name collision is a hard eval error.
+    fleetsLift = builtins.toJSON {
+      tenantNs    = example.fleetEval.compute.tenant2-app.fleet_ns;   # "tenant2"
+      tenantScope = example.fleetEval.compute.tenant2-app.scope;      # "fleet" (default)
+      tenantStack = builtins.hasAttr "tenant2.dev.core" example.fleetEval.stacks;
+      incumbentUnprefixed = builtins.hasAttr "platform.core" example.fleetEval.stacks;
+      inherit collisionCaught;
+    };
+
+    # The CLI catalog (ADR-097): force it as a strict env attr and assert
+    # the settings→catalog projection (bucket via the settings fallback,
+    # toml-era dotted keys present).
+    catalog = builtins.readFile "${example.packages.fleet-catalog}";
+    passAsFile = [ "v2Lift" "catalog" "fleetsLift" ];
   } ''
     test -s "$hostsJson"
     test -s "$stackIds"
     echo "example toplevel: $exampleToplevelDrv"
+    echo "v2 toplevel:      $exampleV2ToplevelDrv"
+    grep -q '"kind":"container"' "$v2LiftPath"
+    grep -q '"node":"pve1"' "$v2LiftPath"
+    grep -q '"sopsKey":"default/api_token"' "$v2LiftPath"
+    grep -q '"secretHosts":\["example-v2"\]' "$v2LiftPath"
+    grep -q '"bucket":"REPLACE-ME-tofu"' "$catalogPath"
+    grep -q '"extensions_dir":"cli-ext"' "$catalogPath"
+    grep -q '"secrets_file":"nix/secrets/secrets.yaml"' "$catalogPath"
+    grep -q '"tenantNs":"tenant2"' "$fleetsLiftPath"
+    grep -q '"tenantScope":"fleet"' "$fleetsLiftPath"
+    grep -q '"tenantStack":true' "$fleetsLiftPath"
+    grep -q '"incumbentUnprefixed":true' "$fleetsLiftPath"
+    grep -q '"collisionCaught":true' "$fleetsLiftPath"
     touch $out
   '';
 

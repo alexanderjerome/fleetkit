@@ -4,6 +4,7 @@ Commands:
     edit              Open secrets in $EDITOR (standard sops workflow)
     edit --plaintext  Decrypt to plaintext YAML for IDE editing, re-encrypt on confirm
     keys list         List all secret key paths
+    keys get          Print one key's value (bare stdout, pipeable)
     keys add          Add or update a key
     keys rm           Remove a key
     keys replace      Replace an existing key's value
@@ -19,8 +20,12 @@ import tempfile
 
 import click
 from rich.console import Console
+from rich.table import Table
 
 console = Console()
+# Diagnostics that must not land on stdout — `keys get` is designed for
+# command substitution, so anything but the value itself goes to stderr.
+err_console = Console(stderr=True)
 
 DEFAULT_SECRETS_FILE = "nix/secrets/secrets.yaml"
 PLAINTEXT_FILE = "nix/secrets/secrets.plaintext.yaml"
@@ -182,6 +187,27 @@ def _list_keys(data: dict, prefix: str = "") -> list[str]:
     return keys
 
 
+def _lookup(secrets_file: str, key_path: str):
+    """Resolve a slash-separated key path to its node in the decrypted tree.
+
+    Exits 1 (message on stderr, so stdout stays pipeable) if the path does
+    not resolve. Returns the node as-is — callers decide whether a dict is
+    acceptable; `get` rejects it, `replace` only cares that it exists.
+    """
+    import yaml
+    _ensure_age_key()
+    data = yaml.safe_load(_sops_decrypt_to_string(secrets_file))
+
+    node = data
+    for part in key_path.split("/"):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            err_console.print(f"[red]ERROR:[/red] Key not found: {key_path}")
+            sys.exit(1)
+    return node
+
+
 # ─────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────
@@ -197,7 +223,7 @@ def secrets():
 
 @secrets.command("init")
 @click.option("--age-key-file", default=None,
-              help="Age key location (default: fleet.toml sops.age_key_file, "
+              help="Age key location (default: $FLEET_AGE_KEY_FILE, "
                    "falling back to ~/.ssh/sops-age.key).")
 @click.option("--from-ssh-key", default=None, type=click.Path(exists=True),
               help="Derive the age key from an existing ed25519 SSH private key "
@@ -213,7 +239,7 @@ def secrets_init(age_key_file: str | None, from_ssh_key: str | None):
       3. an encrypted nix/secrets/secrets.yaml stub
 
     The store path is fleetkit convention (nix/secrets/secrets.yaml,
-    overridable via fleet.toml [sops].secrets_file). Pass the same path
+    overridable via fleet.settings.sopsSecretsFile). Pass the same path
     to mkFleet's `secretsFile` argument so hosts decrypt it at
     activation. Existing files are left untouched.
     """
@@ -374,6 +400,37 @@ def keys_list(secrets_file: str | None):
         console.print(f"  {path}")
 
 
+@keys.command("get")
+@click.argument("key_path")
+@click.option("--file", "secrets_file", default=None)
+@click.option("-n", "--no-newline", is_flag=True,
+              help="Omit the trailing newline (for piping into tools that mind).")
+def keys_get(key_path: str, secrets_file: str | None, no_newline: bool):
+    """Print one secret key's value.
+
+    KEY_PATH is slash-separated (e.g., services/grafana/admin_password).
+
+    The value goes to stdout bare and unformatted, so this is safe in command
+    substitution — it replaces raw `sops -d --extract '["a"]["b"]' file.yaml`:
+
+        export JIRA_API_TOKEN=$(fleet devtools secrets keys get \\
+            integrations/jira/api_token --file nix/secrets/integrations.yaml)
+    """
+    sf = secrets_file or _find_secrets_file()
+    node = _lookup(sf, key_path)
+
+    if isinstance(node, dict):
+        # A branch, not a leaf. Naming the children beats printing a dict
+        # repr the caller would have to parse.
+        err_console.print(
+            f"[red]ERROR:[/red] '{key_path}' is a group, not a value. Contains:")
+        for child in _list_keys(node, key_path):
+            err_console.print(f"  {child}")
+        sys.exit(1)
+
+    click.echo(node, nl=not no_newline)
+
+
 @keys.command("add")
 @click.argument("key_path")
 @click.argument("value")
@@ -417,20 +474,238 @@ def keys_replace(key_path: str, new_value: str, secrets_file: str | None):
     """
     sf = secrets_file or _find_secrets_file()
 
-    # Verify key exists first
-    import yaml
-    _ensure_age_key()
-    plaintext = _sops_decrypt_to_string(sf)
-    data = yaml.safe_load(plaintext)
-
-    parts = key_path.split("/")
-    node = data
-    for part in parts:
-        if isinstance(node, dict) and part in node:
-            node = node[part]
-        else:
-            console.print(f"[red]ERROR:[/red] Key not found: {key_path}")
-            sys.exit(1)
-
+    _lookup(sf, key_path)  # replace, not create — fail if it isn't already there
     _sops_set(sf, key_path, new_value)
     console.print(f"[green]Replaced:[/green] {key_path}")
+
+
+# ── env-export (ADR-096 A5) ──────────────────────────────────────────
+# Materialise per-instance .env files from the fleet.secrets catalog:
+# connection facts DERIVED (host address from hosts.json via the
+# instance's first host consumer), values decrypted per-key straight out
+# of the resource's own sops file — or left as sops:// references with
+# --no-values, which is the shareable/CI-safe template form. Output under
+# .cache/fleet/env/<resource>/<instance>.env, mode 0600.
+
+def _load_secrets_catalog(root: str) -> dict:
+    import json as _json
+    out = subprocess.run(
+        ["nix", "build", ".#secrets-catalog-json", "--no-link", "--print-out-paths"],
+        capture_output=True, text=True, cwd=root)
+    if out.returncode != 0:
+        raise click.ClickException(
+            "building .#secrets-catalog-json failed — is this consumer on a "
+            f"fleetkit with the secrets catalog?\n{out.stderr.strip()[-400:]}")
+    with open(out.stdout.strip().splitlines()[-1]) as f:
+        return _json.load(f)
+
+
+def _hosts_json(root: str) -> dict:
+    import json as _json
+    from ._util import fleet_cache_dir
+    from pathlib import Path
+    hj = fleet_cache_dir(Path(root)) / "hosts.json"
+    if hj.exists():
+        with open(hj) as f:
+            return _json.load(f)
+    return {}
+
+
+def _env_name(prefix: str, leaf: str) -> str:
+    return f"{prefix}_{leaf}".upper().replace("-", "_").replace("/", "_")
+
+
+@secrets.command("env-export")
+@click.argument("selector", required=False)
+@click.option("--all", "export_all", is_flag=True, help="Export every resource/instance in the catalog.")
+@click.option("--no-values", is_flag=True,
+              help="Emit sops://<resource>/<instance>/<name> references instead of decrypted values — safe to share or commit as a template.")
+@click.option("--out", "out_dir", default=None,
+              help="Output directory (default: <repo>/.cache/fleet/env).")
+def secrets_env_export(selector: str | None, export_all: bool, no_values: bool, out_dir: str | None):
+    """Write .env files for RESOURCE or RESOURCE/INSTANCE from fleet.secrets.
+
+    A credential without its address is useless to the developer consuming
+    it, so each file carries <PREFIX>_HOST derived from the instance's
+    first host consumer, any declared vars, and one variable per secret.
+    """
+    import json as _json
+    import os
+    import stat
+    from pathlib import Path
+
+    if not selector and not export_all:
+        raise click.UsageError("name a RESOURCE[/INSTANCE] or pass --all")
+    root = _find_repo_root()
+    catalog = _load_secrets_catalog(root)
+    hosts = _hosts_json(root)
+    base = Path(out_dir) if out_dir else Path(root) / ".cache" / "fleet" / "env"
+
+    want_res, want_inst = (None, None)
+    if selector:
+        parts = selector.split("/", 1)
+        want_res = parts[0]
+        want_inst = parts[1] if len(parts) > 1 else None
+        if want_res not in catalog:
+            raise click.ClickException(
+                f"no such secret resource '{want_res}' "
+                f"(catalog has: {', '.join(sorted(catalog)) or 'nothing'})")
+
+    if not no_values:
+        _require_sops()
+        _ensure_age_key()
+
+    written = 0
+    for rname, res in sorted(catalog.items()):
+        if want_res and rname != want_res:
+            continue
+        sfile = res.get("file") or ""
+        for iname, inst in sorted((res.get("instances") or {}).items()):
+            if want_inst and iname != want_inst:
+                continue
+            prefix = inst.get("envPrefix") or f"{rname}_{iname}"
+            cons = inst.get("consumers") or res.get("consumers") or {}
+            lines = [f"# generated by `fleet secrets env-export` — do not edit",
+                     f"# resource={rname} instance={iname} file={sfile}"]
+            for h in (cons.get("hosts") or [])[:1]:
+                ip = (hosts.get(h) or {}).get("internal_ip") or (hosts.get(h) or {}).get("ip")
+                if ip:
+                    lines.append(f"{_env_name(prefix, 'HOST')}={ip}")
+            for k, v in sorted((inst.get("vars") or {}).items()):
+                lines.append(f"{_env_name(prefix, k)}={v}")
+            for sname, sdef in sorted((inst.get("secrets") or {}).items()):
+                var = _env_name(prefix, (sdef or {}).get("envVar") or sname)
+                if no_values:
+                    lines.append(f"{var}=sops://{rname}/{iname}/{sname}")
+                else:
+                    r = subprocess.run(
+                        [_require_sops(), "-d", "--extract",
+                         f'["{iname}"]["{sname}"]', sfile],
+                        capture_output=True, text=True)
+                    if r.returncode != 0:
+                        raise click.ClickException(
+                            f"decrypt failed for {rname}/{iname}/{sname} in {sfile}: "
+                            f"{r.stderr.strip()[-200:]}")
+                    lines.append(f"{var}={r.stdout.strip()}")
+            dest = base / rname / f"{iname}.env"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("\n".join(lines) + "\n")
+            os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR)
+            written += 1
+            console.print(f"  [green]{dest.relative_to(Path(root)) if dest.is_relative_to(Path(root)) else dest}[/green]"
+                          + ("  [dim](references only)[/dim]" if no_values else ""))
+    if written == 0:
+        raise click.ClickException("selector matched nothing")
+    console.print(f"[bold]{written}[/bold] env file(s) written under {base}")
+
+
+@secrets.command("check")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+def secrets_check(as_json: bool) -> None:
+    """Audit SOPS routing: is every tree where the fleet says it is?
+
+    Splitting a secrets store and leaving the original populated creates a
+    failure that never announces itself. A consumer aimed at the wrong file
+    ERRORS when the key is gone — but when a stale duplicate survives, the
+    read SUCCEEDS and returns a diverged old value. Nothing distinguishes it
+    from a correct read until the two copies disagree, which is typically a
+    rotation later.
+
+    This reads only the PLAINTEXT key names — sops encrypts values, not
+    structure — so it needs no age key and decrypts nothing.
+    """
+    import yaml as _yaml
+    from pathlib import Path
+    from . import config as _config
+    from ._util import find_project_root
+
+    root = find_project_root()
+    secrets_dir = root / "nix" / "secrets"
+    if not secrets_dir.is_dir():
+        console.print(f"[red]ERROR:[/red] {secrets_dir} does not exist")
+        sys.exit(1)
+
+    routes = _config.get("sops.files", {}) or {}
+    default_file = Path(_config.get("sops.secrets_file", "nix/secrets/secrets.yaml")).name
+
+    # `secrets edit --plaintext` leaves a DECRYPTED file behind. It is
+    # gitignored, so it never reaches a remote — but it is real secret material
+    # sitting on a disk, and it is not part of the routing story, so it is
+    # excluded from the analysis and reported separately below.
+    plaintext_files = []
+    for f in sorted(secrets_dir.glob("*.plaintext.yaml")):
+        mode = oct(f.stat().st_mode & 0o777)[2:]
+        plaintext_files.append((f, mode, f.stat().st_size))
+
+    # tree -> {filename: key count}
+    trees: dict[str, dict[str, int]] = {}
+    for f in sorted(secrets_dir.glob("*.yaml")):
+        if f.name.endswith(".plaintext.yaml"):
+            continue
+        try:
+            doc = _yaml.safe_load(f.read_text()) or {}
+        except Exception as e:
+            console.print(f"[yellow]skip[/yellow] {f.name}: unparseable ({e})")
+            continue
+        for tree, body in doc.items():
+            if tree.startswith("sops"):      # sops' own metadata block
+                continue
+            n = len(body) if isinstance(body, dict) else 1
+            trees.setdefault(tree, {})[f.name] = n
+
+    problems: list[dict] = []
+    for tree, where in sorted(trees.items()):
+        owner = Path(routes[tree]).name if tree in routes else default_file
+        others = sorted(k for k in where if k != owner)
+        if owner not in where:
+            problems.append({"tree": tree, "kind": "missing", "owner": owner,
+                             "found_in": others,
+                             "detail": f"routed to {owner}, which does not contain it"})
+        elif others:
+            problems.append({"tree": tree, "kind": "duplicate", "owner": owner,
+                             "found_in": others,
+                             "detail": "also in " + ", ".join(
+                                 f"{o} ({where[o]} keys)" for o in others)})
+
+    if as_json:
+        console.print(json.dumps(
+            {"routes": routes, "trees": trees, "problems": problems}, indent=2))
+        sys.exit(1 if problems else 0)
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("tree"); table.add_column("owner"); table.add_column("status")
+    for tree, where in sorted(trees.items()):
+        owner = Path(routes[tree]).name if tree in routes else default_file
+        p = next((x for x in problems if x["tree"] == tree), None)
+        if p is None:
+            status = "[green]ok[/green]"
+        elif p["kind"] == "missing":
+            status = f"[red]MISSING[/red] — {p['detail']}"
+        else:
+            status = f"[yellow]STALE DUPLICATE[/yellow] — {p['detail']}"
+        table.add_row(tree, owner + ("" if tree in routes else "  (default)"), status)
+    console.print(table)
+
+    for f, mode, size in plaintext_files:
+        console.print(
+            f"[red]DECRYPTED SECRETS ON DISK[/red] {f} ({size} bytes, mode {mode})\n"
+            "  Left behind by `secrets edit --plaintext`. Gitignored, so it cannot reach a\n"
+            "  remote — but it is plaintext fleet credentials on a local disk"
+            + (", readable by every\n  user on this machine." if mode.endswith(("4", "5", "6", "7"))
+               else ".")
+            + " Remove it when you are done editing.")
+
+    if not problems:
+        console.print("[green]OK[/green] every tree lives in exactly the file the fleet routes it to.")
+        sys.exit(1 if plaintext_files else 0)
+
+    dupes = [p for p in problems if p["kind"] == "duplicate"]
+    missing = [p for p in problems if p["kind"] == "missing"]
+    if missing:
+        console.print(f"[red]{len(missing)} tree(s) are routed to a file that does not hold them[/red]"
+                      " — consumers of these fail loudly.")
+    if dupes:
+        console.print(f"[yellow]{len(dupes)} tree(s) exist in more than one file[/yellow]"
+                      " — a consumer pointed at the wrong one reads a STALE value and never errors."
+                      " Trim the copies out of the non-owning file.")
+    sys.exit(1)

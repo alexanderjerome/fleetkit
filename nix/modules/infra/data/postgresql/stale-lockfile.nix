@@ -19,7 +19,7 @@
 #
 # Triggered by any module that sets services.postgresql.enable, so
 # infra.data.postgresql / infra.analytics-db / infra.timescale-db / upstream
-# nix-bitcoin postgres all benefit. Reference: SKRYBITDEV-612.
+# nix-bitcoin postgres all benefit.
 { config, lib, ... }:
 {
   config = lib.mkIf config.services.postgresql.enable {

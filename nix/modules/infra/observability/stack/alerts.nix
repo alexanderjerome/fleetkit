@@ -354,6 +354,177 @@
     labels = { inherit severity; };
   };
 
+  # ── Fleet Health — the generic host-level rules (INFRA-106) ─────
+  # These five were hand-written YAML (fleet-health.yaml) until the INFRA-218
+  # scrub evicted the alert yamls as "consumer content" — but disk / failed-
+  # unit / pg_up are framework-generic, and the live grafana host kept
+  # serving them only because it had not been redeployed. Ported to the
+  # catalog with the ORIGINAL uids so a redeploy adopts the live rules in
+  # place instead of deleting them (INFRA-247).
+
+  # Disk: percentage free, one alert instance per (instance, mountpoint).
+  # /nix/store is a bind of / (same device) — excluded to avoid a dup.
+  # uid defaults to fleet-disk-<severity>: fleet-disk-warning (15%) and
+  # fleet-disk-critical (7%) are the historical ids.
+  diskLowPercent = {
+    threshold ? 15,           # percent free
+    severity ? "warning",
+    duration ? "10m",
+    uid ? "fleet-disk-${severity}"
+  }:
+  grafana.mkAlertRule {
+    inherit uid;
+    title = if severity == "critical" then "Disk Critical" else "Disk Low (${severity})";
+    expr = ''100 * (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!="/nix/store"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!="/nix/store"})'';
+    evaluator = { type = "lt"; params = [ threshold ]; };
+    noDataState = "OK";
+    inherit duration;
+    annotations = {
+      summary = "{{ $labels.instance }}:{{ $labels.mountpoint }} below ${toString threshold}% free disk"
+        + (if severity == "critical" then " — imminent" else "");
+      description = "Run `fleet remote {{ $labels.instance }} df -h` — free space or grow the disk before it fills. A full disk silently wedges services (Postgres cannot write its lock file; at 0% services fail to start).";
+    };
+    labels = { inherit severity; };
+  };
+
+  # Disk: absolute floor. Catches a SMALL disk at a moderate % that is
+  # genuinely low on bytes. vfat excluded (INFRA-108): 512 MiB /boot
+  # partitions can never hold 2 GiB free, so a byte floor fires on them
+  # forever; the percentage rules still catch a genuinely-filling /boot.
+  diskFreeBytesFloor = {
+    floorBytes ? 2147483648,  # 2 GiB
+    severity ? "critical",
+    duration ? "5m"
+  }:
+  grafana.mkAlertRule {
+    uid = "fleet-disk-critical-bytes";
+    title = "Disk Critical (absolute free)";
+    expr = ''node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|vfat",mountpoint!="/nix/store"}'';
+    evaluator = { type = "lt"; params = [ floorBytes ]; };
+    noDataState = "OK";
+    inherit duration;
+    annotations = {
+      summary = "{{ $labels.instance }}:{{ $labels.mountpoint }} under ${toString (builtins.div floorBytes 1073741824)} GiB free";
+      description = "Run `fleet remote {{ $labels.instance }} df -h`. Low absolute headroom regardless of percentage.";
+    };
+    labels = { inherit severity; };
+  };
+
+  # Any failed systemd unit (node_systemd_unit_state from the Alloy systemd
+  # collector, INFRA-106). user@<uid> session managers are excluded: they
+  # flap into "failed" on interrupted SSH sessions and self-heal on the next
+  # login — pure noise (INFRA-146).
+  #
+  # suppressWhenPostgresDown (INFRA-247): Grafana's embedded Alertmanager has
+  # no inhibition rules, so the "PostgreSQL Down mutes the unit-failed noise
+  # on the same host" relationship is expressed in PromQL — `unless on
+  # (instance) (pg_up == 0)` drops this host's failed-unit instances while
+  # its postgres exporter reports the server down. PostgreSQL Down (critical)
+  # is the actionable page for that incident; the failed postgresql.service
+  # plus everything that depends on it is the same outage, not 5 more posts.
+  unitFailed = {
+    severity ? "warning",
+    duration ? "5m",
+    excludeUnitsRegex ? "user@.*",
+    suppressWhenPostgresDown ? true
+  }:
+  grafana.mkAlertRule {
+    uid = "fleet-unit-failed";
+    title = "Systemd Unit Failed";
+    # Plain string for the suffix: an indented ''…'' would strip the leading
+    # space and glue "1unless" together.
+    expr = ''node_systemd_unit_state{state="failed",name!~"${excludeUnitsRegex}"} == 1''
+      + (if suppressWhenPostgresDown then " unless on (instance) (pg_up == 0)" else "");
+    evaluator = { type = "gt"; params = [ 0 ]; };
+    noDataState = "OK";
+    inherit duration;
+    annotations = {
+      summary = "{{ $labels.name }} failed on {{ $labels.instance }}";
+      description = "Run `fleet remote {{ $labels.instance }} systemctl status {{ $labels.name }}` and `journalctl -u {{ $labels.name }}`.";
+    };
+    labels = { inherit severity; };
+  };
+
+  # Postgres down — job-agnostic: every postgres exporter publishing pg_up.
+  # (pgDown above is the per-job variant with a host name in the title.)
+  # NoData alerts: a vanished exporter on a DB host must page, not go quiet.
+  postgresDown = {
+    severity ? "critical",
+    duration ? "5m"
+  }:
+  grafana.mkAlertRule {
+    uid = "fleet-postgres-down";
+    title = "PostgreSQL Down";
+    expr = ''pg_up'';
+    evaluator = { type = "lt"; params = [ 1 ]; };
+    noDataState = "Alerting";
+    inherit duration;
+    annotations = {
+      summary = "PostgreSQL down (job {{ $labels.job }})";
+      description = "pg_up=0 on {{ $labels.instance }}. Check `fleet remote {{ $labels.instance }} systemctl status postgresql` — often a full disk (see the Disk alerts).";
+    };
+    labels = { inherit severity; };
+  };
+
+  # ── Garage S3 backend filling ───────────────────────────────────
+  # Garage backs BOTH the atticd Nix cache and service uploads (and Loki
+  # chunks since INFRA-169), so a full Garage breaks pushes, uploads and log
+  # ingestion at once. max() over the data/metadata volumes. Warning tier
+  # keeps its historical uid (garage-disk-filling); higher tiers get
+  # garage-disk-filling-<severity> (INFRA-247 added critical at 90%).
+  garageDiskFilling = {
+    threshold ? 85,
+    severity ? "warning",
+    duration ? "10m"
+  }:
+  grafana.mkAlertRule {
+    uid = "garage-disk-filling" + (if severity == "warning" then "" else "-${severity}");
+    title = "Garage S3 Disk Filling" + (if severity == "warning" then "" else " (${severity})");
+    expr = ''max(1 - garage_local_disk_avail / garage_local_disk_total) * 100'';
+    evaluator = { type = "gt"; params = [ threshold ]; };
+    inherit duration;
+    annotations = {
+      summary = "Garage S3 backend is over ${toString threshold}% full";
+      description = "Garage (s3 host) stores the atticd Nix cache, Loki chunks AND service uploads — a full Garage breaks pushes, uploads and log ingestion. Check the /data volume on the s3 host; prune attic/Loki retention or grow the volume.";
+    };
+    labels = { inherit severity; };
+  };
+
+  # ── WAL archiving stalled — no successful archive for too long ──
+  # Complements pgbackrestArchiveFailing (which needs failed_count to
+  # CLIMB): archiving can also stop making progress without an error count
+  # — archive_command hanging on an unreachable S3 endpoint, a wedged
+  # pgbackrest lock, a stanza mismatch that fails once and then blocks.
+  # pg_stat_archiver_last_archive_age (seconds since last_archived_time)
+  # grows monotonically in every one of those cases; on the fleet it sat at
+  # 7.9 DAYS during the Aug 2026 archiving outage while failed_count barely
+  # moved. Gated on pg_up == 1 so an outright-down server pages once via
+  # PostgreSQL Down, not twice. Hosts without archive_mode publish NaN /
+  # nothing, which never crosses the threshold (NoData → OK).
+  #
+  # Caveat: an idle database ships no WAL, so its age grows legitimately.
+  # Postgres' archive_timeout bounds that (the pgbackrest module does not set
+  # it); with maxAge = 1h any DB that writes at least one WAL segment per
+  # hour, or has archive_timeout <= 30min, never false-fires.
+  pgArchiveStalled = {
+    maxAge ? 3600,            # seconds since the last successful archive
+    severity ? "critical",
+    duration ? "15m"
+  }:
+  grafana.mkAlertRule {
+    uid = "pg-archive-stalled";
+    title = "Postgres WAL archiving stalled";
+    expr = ''max by (job, instance) (pg_stat_archiver_last_archive_age) and on (job, instance) (pg_up == 1)'';
+    evaluator = { type = "gt"; params = [ maxAge ]; };
+    noDataState = "OK";
+    inherit duration;
+    annotations = {
+      summary = "{{ $labels.job }}: no WAL segment archived for over ${toString (builtins.div maxAge 60)} min";
+      description = "pg_stat_archiver.last_archived_time is stale while postgres is up — archive_command is hanging or silently not shipping. Unshipped WAL cannot recycle and piles up until /data fills (INFRA-91). Check `fleet remote {{ $labels.instance }} \"sudo -u postgres pgbackrest --stanza=<stanza> check\"`, `SELECT * FROM pg_stat_archiver`, and S3-endpoint reachability from the DB host.";
+    };
+    labels = { inherit severity; };
+  };
+
   # ── Memory pressure — low available memory (OOM-kill risk) ──────
   memoryPressure = {
     threshold ? 10,          # percent of RAM still available

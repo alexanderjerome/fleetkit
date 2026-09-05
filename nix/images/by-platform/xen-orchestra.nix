@@ -38,7 +38,7 @@
 #     a cloud-config drive — NixOS XOA VMs deliberately don't get
 #     one, see wantsCloudConfig in nix/lib/tf/xen-orchestra.nix)
 #   - qemu-guest-agent + xe-guest-utilities (so XOA reports IPs back
-#     to `sk inventory generate`'s discovery patcher)
+#     to `fleet inventory generate`'s discovery patcher)
 #   - openssh + sysadmin pubkey on root
 #   - serial console (XOA console + ttyS0 getty)
 #   - sops-nix age-key staging directory

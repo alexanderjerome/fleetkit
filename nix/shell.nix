@@ -4,7 +4,7 @@
 # sops, ansible, the venv for the fleet CLI) and nothing else: every piece
 # of runtime environment — provider credentials, ansible paths, the tofu
 # plugin cache, the age key — is provisioned by the `fleet` CLI itself at
-# invocation time, from fleet.toml + the SOPS store. Nothing here should
+# invocation time, from the fleet catalog + the SOPS store. Nothing here should
 # require (or leak) knowledge of a specific fleet.
 #
 # Consumer repos that need extra tools or env (app CLIs, DB DSNs, language

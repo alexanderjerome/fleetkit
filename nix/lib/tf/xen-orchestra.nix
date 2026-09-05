@@ -4,7 +4,7 @@
 # historical naming) talks to the XOA control plane; identifiers here
 # stay `xenorchestra_*` to match the provider's resource types.
 #
-# Scope rule (SKRYBITDEV-618): the only resource.* blocks emitted are
+# Scope rule: the only resource.* blocks emitted are
 # xenorchestra_vm and xenorchestra_cloud_config. Pools, networks, SRs,
 # and templates are read-only via data.xenorchestra_*. They must
 # already exist on the XCP-ng host (use xo-cli list-objects to
@@ -24,7 +24,7 @@ let
   # XCP-ng/XOA-specific: disk size changes on xenorchestra_vm are
   # ForceNew in the vatesfr/xenorchestra provider. To grow a disk
   # without TF destroying it (and the data on it), we ignore size
-  # drift. Growth is operator-driven via `sk xoa resize-disk` →
+  # drift. Growth is operator-driven via `fleet xoa resize-disk` →
   # `xo-cli vdi.set` + `resize2fs` inside the guest. The fleet
   # `size_gb` is the *intent at first apply*; live size is owned by
   # the operator afterwards.
@@ -193,9 +193,9 @@ in rec {
   # and re-runs the provisioner on the next apply — that's the
   # reconciliation path for VMs that drifted or predate INFRA-39.
   #
-  # local-exec dependency: nodejs (via `nix-shell -p nodejs`) + npx
+  # local-exec dependency: nodejs (via `nix shell nixpkgs#nodejs`) + npx
   # to fetch xo-cli on the fly. xo-cli reads its config from
-  # ~/.config/xo-cli/config.json on the host where `sk deploy tf
+  # ~/.config/xo-cli/config.json on the host where `fleet deploy tf
   # apply` runs.
   #
   # Failures fail the apply on purpose (no on_failure=continue): a
@@ -211,7 +211,11 @@ in rec {
       triggers_replace = [ "\${xenorchestra_vm.${name}.id}" order ];
       provisioner = [{
         local-exec = {
-          command = ''nix-shell -p nodejs --run "npx --yes xo-cli vm.setBootOrder vm=''${xenorchestra_vm.${name}.id} order=${order}"'';
+          # `nix shell nixpkgs#…` (flake registry), NOT `nix-shell -p` —
+          # the latter needs a channels NIX_PATH, which flakes-only
+          # operator hosts don't have (all 13 hooks failed with "file
+          # 'nixpkgs' was not found in the Nix search path", INFRA-234).
+          command = ''nix shell nixpkgs#nodejs --command npx --yes xo-cli vm.setBootOrder vm=''${xenorchestra_vm.${name}.id} order=${order}'';
         };
       }];
     };

@@ -1,8 +1,9 @@
 { ... }:
 
-# fleetkit parameter surface — every framework-visible value that is
-# specific to YOUR environment, in one place. Keep in sync with
-# fleet.toml (the CLI-side twin).
+# fleetkit parameter surface — every environment-specific value, in one
+# place. The `fleet` CLI reads the same values through the generated
+# catalog (`nix build .#fleet-catalog` → .cache/fleet/catalog.json,
+# ADR-097) — declared once, never duplicated.
 #
 # MINIMUM-VIABLE PRINCIPLE: fleetkit only requires the settings your
 # fleet actually exercises. This template enables no optional service,
@@ -13,6 +14,12 @@
 
 {
   config.fleet.settings = {
+    # S3(-compatible) tofu state bucket. Shared estate substrate — if you
+    # later run several fleets, separation is the state KEY prefix, not
+    # the bucket (ADR-097).
+    backend.bucket = "REPLACE-ME-tofu";
+    # backend.region = "us-east-1";
+
     # SSH public keys for the built-in operator accounts
     # (sysadmin / colmena / dev) on every fleet host.
     # REQUIRED — the base layer creates these accounts on every host.

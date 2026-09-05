@@ -34,6 +34,13 @@ in
   # These mirror the v1 core.nix schema verbatim so existing host
   # configs that set `infra.networking.singleInterface = true;` etc.
   # don't need touching.
+  options.infra.githubAccessToken = mkOption {
+    type = types.bool;
+    default = config.fleet.settings.githubAccessTokens;
+    defaultText = lib.literalExpression "config.fleet.settings.githubAccessTokens";
+    description = "Provision the GitHub machine-user token (SOPS integrations/github/machine_user_token) into nix access-tokens on THIS host. Needed only where nix itself fetches private GitHub repos: a builder, or a machine deploys are run from. Defaults to the fleet-wide fleet.settings.githubAccessTokens so a fleet can flip the default off and opt individual hosts in.";
+  };
+
   options.infra.networking = {
     internalIp = mkOption {
       type = types.str;
@@ -181,11 +188,18 @@ in
     ] ++ config.fleet.settings.cache.trustedPublicKeys);
 
     # ── GitHub machine-user access token (flake input fetches) ────
-    # Opt-in: only fleets whose flake inputs fetch private GitHub repos
-    # need it (fleet.settings.githubAccessTokens).
+    # PER-HOST opt-in (infra.githubAccessToken). The old model provisioned
+    # the machine-user token on EVERY host whenever the fleet-wide setting
+    # was on — which made it the single widest secret in the consumer fleet
+    # (58 of 59 hosts) for a capability almost none of them use: fetching
+    # private GitHub flake inputs during a LOCAL nix build. Hosts that pull
+    # closures from the deployer or the binary cache never authenticate to
+    # GitHub at all. fleet.settings.githubAccessTokens remains as the
+    # fleet-wide DEFAULT for the per-host option, so existing consumers
+    # keep their behaviour until they flip the default off and opt hosts in.
     sops.secrets."integrations/github/machine_user_token" =
-      lib.mkIf config.fleet.settings.githubAccessTokens (sopsLib.mkSecret {});
-    sops.templates."nix-access-tokens" = lib.mkIf config.fleet.settings.githubAccessTokens (sopsLib.mkTemplate {
+      lib.mkIf config.infra.githubAccessToken (sopsLib.mkSecret {});
+    sops.templates."nix-access-tokens" = lib.mkIf config.infra.githubAccessToken (sopsLib.mkTemplate {
       content = "access-tokens = github.com=${p."integrations/github/machine_user_token"}";
       # World-readable: required so non-root build users (e.g.
       # hydra-queue-runner on the builder host) can fetch from github
@@ -195,7 +209,7 @@ in
       mode = "0444";
     });
 
-    environment.etc."nix/access-tokens.conf" = lib.mkIf config.fleet.settings.githubAccessTokens {
+    environment.etc."nix/access-tokens.conf" = lib.mkIf config.infra.githubAccessToken {
       source = config.sops.templates."nix-access-tokens".path;
     };
 

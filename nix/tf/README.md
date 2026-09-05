@@ -2,7 +2,7 @@
 
 Terranix emitters — translate the fleet manifest (`nix/fleet/`) into
 Terraform JSON that OpenTofu applies. This is the provisioning half of
-the pipeline; never run `tofu` directly, use `sk deploy tf <cmd>`.
+the pipeline; never run `tofu` directly, use `fleet deploy tf <cmd>`.
 
 `default.nix` is instantiated once per leaf stack
 (`<env>.<stack>`, e.g. `dev.bitcoin.signet`) and configures the S3 state
