@@ -161,7 +161,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -287,7 +288,8 @@
           {
             "ignore_changes": [
               "tags",
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -376,7 +378,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -477,7 +480,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -540,7 +544,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -615,7 +620,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -680,7 +686,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -746,7 +753,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -820,7 +828,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ]
           }
         ],
@@ -894,7 +903,8 @@
         "lifecycle": [
           {
             "ignore_changes": [
-              "operating_system"
+              "operating_system",
+              "initialization"
             ],
             "prevent_destroy": true
           }
