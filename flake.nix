@@ -315,7 +315,9 @@
     in {
       packages = rec {
         # The operator CLI (was `sk`; renamed in the extraction).
-        fleet = pkgs.callPackage ./nix/pkgs/_launcher { };
+        # xoa-cli passed explicitly (it's a flake package, not in pkgs) so the
+        # `tf adopt` resolvers can import xoa_cli.api.XoRpc (INFRA-274).
+        fleet = pkgs.callPackage ./nix/pkgs/_launcher { inherit xoa-cli; };
         default = fleet;
 
         # pve-cli (wraps Corsinvest cv4pve) — kubectl-style remote CLI for Proxmox VE.

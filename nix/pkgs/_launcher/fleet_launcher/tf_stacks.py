@@ -919,6 +919,45 @@ def _xoa_vm_uuid(name: str, body: dict) -> str | None:
     return vm.get("uuid") if vm else None
 
 
+# xenorchestra_cloud_config: same story as the VM — XO mints the UUID, and the
+# only config-known handle is the config's `name` (the emitter sets it to
+# "<resource>-cloud-init"). Unlike VMs, cloud-config names are NOT unique in a
+# live XO (hand-made configs, other tools, and re-created sandboxes collide), so
+# this keeps a name -> {ids} multimap and REFUSES a name that resolves to more
+# than one live object rather than binding an arbitrary id. The list is only on
+# XO's JSON-RPC (`cloudConfig.getAll`), not the REST surface xoa_api speaks, so
+# it goes through the xoa-cli websocket client (already a launcher dependency).
+_xoa_cc_ids_by_name: dict | None = None
+
+
+def _xoa_cloud_config_id(name: str, body: dict) -> str | None:
+    """Resolve a declared xenorchestra_cloud_config to its live UUID.
+
+    Raises RuntimeError if XO is unreachable (unknown, not absent) and
+    ValueError if the declared name matches more than one live config
+    (ambiguous — never guessed). Returns the uuid on a unique match, or None
+    when nothing carries the name (not provisioned yet)."""
+    global _xoa_cc_ids_by_name
+    if _xoa_cc_ids_by_name is None:
+        from xoa_cli.api import XoRpc
+        try:
+            with XoRpc() as rpc:
+                configs = rpc.call("cloudConfig.getAll")
+        except Exception as e:
+            raise RuntimeError(f"XO JSON-RPC unreachable: {e}") from e
+        acc: dict = {}
+        for c in configs or []:
+            if isinstance(c, dict) and c.get("name") and c.get("id"):
+                acc.setdefault(c["name"], set()).add(c["id"])
+        _xoa_cc_ids_by_name = acc
+    label = body.get("name") or f"{name}-cloud-init"
+    ids = _xoa_cc_ids_by_name.get(label) or set()
+    if len(ids) > 1:
+        raise ValueError(f"{len(ids)} live cloud configs named {label!r} — "
+                         "ambiguous, refusing to guess")
+    return next(iter(ids), None)
+
+
 # type -> (id_fn(name, body) -> str | None, kind)
 # `kind` is one of:
 #   True     — id is DERIVED from config fields, then VERIFIED against the live
@@ -945,6 +984,7 @@ _ADOPT_RESOLVERS: dict = {
     "proxmox_virtual_environment_group":
         (lambda n, b: b.get("group_id"), False),
     "xenorchestra_vm": (_xoa_vm_uuid, "lookup"),
+    "xenorchestra_cloud_config": (_xoa_cloud_config_id, "lookup"),
 }
 
 # No real-world counterpart: nothing to adopt, ever. Called out explicitly
@@ -1025,10 +1065,12 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                 try:
                     rid = id_fn(name, body)
                 except Exception as e:
-                    # Could not reach/query the provider: unknown, NOT absent —
-                    # surface it so the operator fixes creds, not the config.
+                    # The lookup could not yield a confirmed single id — either
+                    # the provider was unreachable (unknown, NOT absent) or the
+                    # key was ambiguous. Never adopt on a guess; surface the
+                    # reason so the operator fixes creds or the collision.
                     rows.append({"addr": addr, "id": "", "state": "unverified",
-                                 "note": f"provider lookup failed: {e}"})
+                                 "note": f"lookup inconclusive: {e}"})
                     continue
                 if not rid:
                     rows.append({"addr": addr, "id": "", "state": "not-found",
