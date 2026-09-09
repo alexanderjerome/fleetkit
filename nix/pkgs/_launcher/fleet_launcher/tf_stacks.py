@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -801,8 +802,15 @@ def tf_backend_check(stack: str | None) -> None:
         console.print("[red]FAIL[/red]     `sops` not on PATH — run inside `nix develop`.")
         sys.exit(1)
 
+    from .config import get as _cfg_get
+    creds_path = _cfg_get("backend_s3.creds_sops_path") or '["integrations"]["aws"]'
+    # Name the path as the fleet configured it; reporting "integrations.aws" at
+    # a fleet that keeps its keys elsewhere sends the reader hunting for a key
+    # that is not supposed to exist.
+    creds_label = ".".join(re.findall(r'\["([^"]+)"\]', creds_path)) or creds_path
+
     def _extract(path: Path):
-        r = subprocess.run([sops, "-d", "--extract", '["integrations"]["aws"]', str(path)],
+        r = subprocess.run([sops, "-d", "--extract", creds_path, str(path)],
                            capture_output=True, text=True, timeout=15)
         if r.returncode != 0:
             return None, (r.stderr or "").strip().splitlines()[-1:] or [""]
@@ -813,9 +821,9 @@ def tf_backend_check(stack: str | None) -> None:
     if cfg_file.is_file():
         creds, err = _extract(cfg_file)
     if creds:
-        console.print(f"[green]creds[/green]    integrations.aws found in {cfg_file}")
+        console.print(f"[green]creds[/green]    {creds_label} found in {cfg_file}")
     else:
-        console.print(f"[red]FAIL[/red]     integrations.aws NOT in {cfg_file} "
+        console.print(f"[red]FAIL[/red]     {creds_label} NOT in {cfg_file} "
                       f"— the file this fleet routes the integrations tree to")
         ok = False
         # A split SOPS store is the usual cause; say where it actually lives.
@@ -828,6 +836,15 @@ def tf_backend_check(stack: str | None) -> None:
                               f"or point fleet.settings.sopsSecretsFile there.")
                 creds = creds or found
                 break
+        else:
+            # No sibling holds it under this name either. The usual cause is
+            # not a missing secret but a differently-NAMED one — the fleet
+            # files its state credentials under a tree of its own and never
+            # told the CLI, which cannot distinguish that from absence.
+            console.print("[yellow]  →[/yellow]      if this fleet files its state "
+                          "credentials elsewhere, set "
+                          "fleet.settings.backend.s3.credsSopsPath "
+                          "(e.g. integrations.tofu.garage).")
 
     if not creds:
         console.print("[red]VERDICT[/red]  no credentials resolvable. Nothing to test against AWS.")

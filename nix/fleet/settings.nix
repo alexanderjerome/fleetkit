@@ -294,6 +294,27 @@
         default = "us-east-1";
         description = "AWS region of the state bucket (type = s3).";
       };
+      s3 = {
+        credsSopsPath = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = ''["integrations"]["tofu"]["garage"]'';
+          description = ''
+            SOPS path to the S3 state-backend credentials — a mapping with
+            `access_key_id`, `secret_access_key`, and optionally `region` —
+            exported as AWS_* at run time. Defaults to `["integrations"]["aws"]`.
+
+            This is a setting rather than a constant because the AWS name is a
+            site opinion, not a fact about the backend: a fleet whose state
+            lives in Garage or MinIO files those keys under its own tree. When
+            the CLI guessed, the extract simply returned non-zero and the
+            credentials silently stayed unset — surfacing much later as tofu
+            reporting no valid credential sources, with nothing pointing at the
+            real cause.
+          '';
+        };
+      };
+
       pg = {
         schemaPrefix = lib.mkOption {
           type = lib.types.str;

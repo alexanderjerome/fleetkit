@@ -165,6 +165,21 @@ def _setenv_if_blank(name: str, value) -> None:
         os.environ[name] = str(value)
 
 
+def _sops_file_for(sops_path: str, default_file: str) -> str:
+    """The SOPS file owning the tree a `--extract` path names.
+
+    A configurable sops path names its own top-level tree — `["dbs"]…`,
+    `["integrations"]…` — so route on that rather than assuming the
+    integrations file. Guessing fails SILENTLY: the extract returns non-zero,
+    the caller's `except` swallows it, and the missing credential surfaces
+    later as an unrelated-looking tofu error.
+    """
+    import re
+    from .config import file_for as _file_for
+    m = re.match(r'\["([^"]+)"\]', sops_path)
+    return str(_file_for(m.group(1))) if m else default_file
+
+
 def _setup_env() -> None:
     """Load .env and populate the env vars our tools consume.
 
@@ -256,17 +271,28 @@ def _setup_env() -> None:
     from .config import integrations_file as _cfg_secrets
     secrets_file = str(_cfg_secrets())
 
-    # AWS credentials for the tofu S3 state backend.
+    # AWS credentials for the tofu S3 state backend. The path is a setting
+    # (`fleet.settings.backend.s3.credsSopsPath`) because "integrations.aws" is
+    # a site opinion, not a fact about the backend — a fleet on Garage or MinIO
+    # files those keys under its own tree, and the hardcoded name left it with
+    # no credentials and no explanation.
     try:
+        from .config import get as _cfg_get
+        aws_path = _cfg_get("backend_s3.creds_sops_path") or '["integrations"]["aws"]'
         result = subprocess.run(
-            [sops, "-d", "--extract", '["integrations"]["aws"]', secrets_file],
+            [sops, "-d", "--extract", aws_path, _sops_file_for(aws_path, secrets_file)],
             capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             import yaml
             aws = yaml.safe_load(result.stdout)
             _setenv_if_blank("AWS_ACCESS_KEY_ID", aws["access_key_id"])
             _setenv_if_blank("AWS_SECRET_ACCESS_KEY", aws["secret_access_key"])
-            _setenv_if_blank("AWS_DEFAULT_REGION", aws["region"])
+            # Optional: S3-compatible stores frequently have no meaningful
+            # region, and settings.backend.region already feeds the backend
+            # block. Demanding it here would raise mid-block and drop the two
+            # keys that were the point of reading the file.
+            if aws.get("region"):
+                _setenv_if_blank("AWS_DEFAULT_REGION", aws["region"])
     except Exception:
         pass
 
@@ -284,12 +310,8 @@ def _setup_env() -> None:
             # credentials, and guessing here fails SILENTLY: the extract
             # returns non-zero, the except swallows it, and tofu later reports
             # a missing backend credential with no hint as to why.
-            import re as _re
-            from .config import file_for as _file_for
-            m_tree = _re.match(r'\["([^"]+)"\]', pg_path)
-            pg_file = str(_file_for(m_tree.group(1))) if m_tree else secrets_file
             result = subprocess.run(
-                [sops, "-d", "--extract", pg_path, pg_file],
+                [sops, "-d", "--extract", pg_path, _sops_file_for(pg_path, secrets_file)],
                 capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 _setenv_if_blank("PG_CONN_STR", result.stdout.strip())

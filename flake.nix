@@ -266,6 +266,8 @@
             sops.files = fleetEval.settings.sopsFiles;
             # Where the launcher finds PG_CONN_STR for the pg backend.
             backend_pg.conn_str_sops_path = fleetEval.settings.backend.pg.connStrSopsPath;
+            # …and the AWS_* keys for the s3 backend. Null = ["integrations"]["aws"].
+            backend_s3.creds_sops_path = fleetEval.settings.backend.s3.credsSopsPath;
             cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
             pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
             pve.install = fleetEval.settings.pveInstall;
