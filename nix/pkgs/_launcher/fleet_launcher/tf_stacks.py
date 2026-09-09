@@ -985,8 +985,14 @@ def _backend_check_pg(root: Path, backend: dict) -> None:
                   + (f" from {path}" if path else " from the environment"))
 
     psql = shutil.which("psql")
+    # `nix run` runs the package's DEFAULT program, so `nixpkgs#postgresql --
+    # psql` execs bin/postgresql — which does not exist (the server binary is
+    # bin/postgres) — and passes "psql" to it as an argument. The awscli2
+    # fallback below gets away with `nix run` because there the default
+    # program IS the one we want; here it has to be `nix shell --command`.
     prefix = [psql] if psql else [
-        "nix", "run", "--inputs-from", str(root), "nixpkgs#postgresql", "--", "psql"]
+        "nix", "shell", "--inputs-from", str(root), "nixpkgs#postgresql",
+        "--command", "psql"]
     q = ("select current_user, current_database(), "
          "has_database_privilege(current_user, current_database(), 'CREATE')")
     r = subprocess.run(prefix + [conn, "-At", "-F", "|", "-c", q],
