@@ -56,14 +56,39 @@ console = Console()
 # are cheap because Nix dedups in its store; false negatives would be
 # incorrect, so the fingerprint stays conservative.
 
+def _fingerprint_paths(root: Path) -> list[Path]:
+    """Every file whose content can change terranix output.
+
+    Enumerated from git rather than a hardcoded directory list. The list was
+    fleetkit's OWN layout (nix/fleet, nix/hosts, nix/tf, nix/lib), none of
+    which exists in a consumer — a consumer keeps its data in ./fleet and its
+    stacks in ./tofu. There the fingerprint collapsed to flake.lock alone, so
+    every edit to the consumer's own fleet served a STALE config.tf.json until
+    something moved the lock. A backend switch in particular became a silent
+    no-op: the cache handed back the old backend block and the migration had
+    nothing to migrate.
+
+    Tracked-only is the right filter, not a limitation: an untracked .nix is
+    invisible to flake eval too ("path does not exist in Git repository"), so
+    it cannot affect the output being fingerprinted.
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "*.nix", "flake.lock"],
+            text=True, stderr=subprocess.DEVNULL)
+        rel = [p for p in out.split("\0") if p and not p.startswith(".tf/")]
+        return sorted({root / p for p in rel} | {root / "flake.lock"})
+    except (subprocess.CalledProcessError, OSError):
+        # Not a git checkout. Flake eval would fail here anyway; fall back to
+        # fleetkit's own layout so the CLI stays usable in a store copy.
+        return sorted({root / "flake.lock"} | {
+            p for d in ("fleet", "hosts", "tf", "lib")
+            for p in (root / "nix" / d).rglob("*.nix")})
+
+
 def _input_hash(root: Path) -> str:
     h = hashlib.sha256()
-    paths: list[Path] = [root / "flake.lock"]
-    paths += sorted((root / "nix" / "fleet").rglob("*.nix"))
-    paths += sorted((root / "nix" / "hosts").rglob("*.nix"))
-    paths += sorted((root / "nix" / "tf").rglob("*.nix"))
-    paths += sorted((root / "nix" / "lib").rglob("*.nix"))
-    for p in paths:
+    for p in _fingerprint_paths(root):
         if not p.exists():
             continue
         h.update(str(p.relative_to(root)).encode())
@@ -454,6 +479,234 @@ def tf_init(scope: str, upgrade: bool) -> None:
         subprocess.run(cmd, cwd=wd, check=False)
 
 
+# ── Backend migration ────────────────────────────────────────────────
+#
+# Which backend a stack uses is decided in Nix (fleet.settings.backend plus
+# any perStack override) and lands in config.tf.json. Changing the setting
+# therefore changes where tofu LOOKS, and does nothing whatsoever about the
+# state already sitting in the old backend. Left alone, the next plan reads
+# an empty backend as "none of this exists yet" and the next apply rebuilds
+# the fleet — which is why this is a verb with verification rather than a
+# note telling operators to run `tofu init -migrate-state` themselves.
+#
+# The ordering below is the whole trick: `.terraform/` still binds the OLD
+# backend until init re-binds it, so the pre-migration `state pull` must
+# happen BEFORE the new config.tf.json is staged.
+
+def _backend_of(workdir: Path) -> tuple[str, dict]:
+    """The backend kind and block recorded in a staged config.tf.json."""
+    cfg_path = workdir / "config.tf.json"
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return "", {}
+    backend = (cfg.get("terraform") or {}).get("backend") or {}
+    if not backend:
+        return "", {}
+    kind = next(iter(backend))
+    return kind, backend[kind] or {}
+
+
+def _state_identity(workdir: Path) -> dict | None:
+    """Identity of the state in the CURRENTLY initialised backend.
+
+    lineage is tofu's own "is this the same state file" marker; serial counts
+    writes. Together with the instance count they answer the only question
+    that matters after a migration: is what landed the same state, or a
+    different (possibly empty) one wearing the same name.
+
+    None means the state could not be read at all — an unreachable backend or
+    a workdir that was never initialised. That is deliberately not treated as
+    "empty": an unreachable old backend looks identical to an empty one, and
+    migrating on that assumption is how a fleet loses its inventory.
+    """
+    r = subprocess.run(["tofu", "state", "pull"], cwd=workdir,
+                       capture_output=True, text=True, check=False)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        st = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+    resources = st.get("resources") or []
+    return {
+        "lineage": st.get("lineage"),
+        "serial": st.get("serial"),
+        "resources": len(resources),
+        "instances": sum(len(res.get("instances") or []) for res in resources),
+        "raw": r.stdout,
+    }
+
+
+def _fmt_backend(kind: str, cfg: dict) -> str:
+    """One-line rendering of a backend block, for the plan table."""
+    if kind == "s3":
+        return f"s3 {cfg.get('bucket')}/{cfg.get('key')}"
+    if kind == "pg":
+        return f"pg schema={cfg.get('schema_name')}"
+    if kind == "local":
+        return f"local {cfg.get('path')}"
+    return kind or "(none)"
+
+
+@tf_stacks.command("migrate-backend")
+@click.argument("scope")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+@click.option("--dry-run", is_flag=True,
+              help="Report the old → new backend per leaf and stop, moving no state.")
+@click.option("--backup-dir", default=".tf/.migrate-backup", show_default=True,
+              type=click.Path(file_okay=False),
+              help="Where the pre-migration state dump is written.")
+def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) -> None:
+    """Move matched leaves' state into the backend the fleet NOW declares.
+
+    Run this AFTER changing fleet.settings.backend (or a perStack override)
+    and BEFORE the next plan or apply. For each leaf it:
+
+    \b
+      1. reads lineage, serial and instance count from the old backend
+      2. dumps that state to --backup-dir (refusing to clobber an existing dump)
+      3. re-renders config.tf.json so the new backend block is in place
+      4. runs `tofu init -migrate-state`, copying the state across
+      5. re-reads the identity from the new backend and REFUSES to call it a
+         success unless lineage matches, serial did not go backwards, and the
+         instance count is unchanged
+
+    A leaf whose old state cannot be read is skipped, not migrated: an
+    unreachable backend and an empty one are indistinguishable from here, and
+    only one of them is safe to proceed from.
+
+    \b
+    Example — after switching the fleet from S3 to Postgres:
+      fleet deploy tf migrate-backend all --dry-run
+      fleet deploy tf migrate-backend all
+    """
+    root = find_project_root()
+    leaves = _resolve_scope(root, scope)
+
+    # ── plan: what each leaf moves from and to ─────────────────────
+    plans: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    for leaf in leaves:
+        wd = _workdir(root, leaf)
+        if not (wd / "config.tf.json").exists() or not (wd / ".terraform").exists():
+            skipped.append((leaf, "never initialised — no state to move; "
+                                  "`fleet deploy tf init` binds it to the new backend directly"))
+            continue
+        old_kind, old_cfg = _backend_of(wd)
+        before = _state_identity(wd)
+        if before is None:
+            skipped.append((leaf, f"could not read state from the current backend ({old_kind or 'unknown'})"))
+            continue
+        # Re-render against the current settings. The sidecar is dropped first
+        # because a cache hit here would compare the old backend with itself
+        # and report nothing to do.
+        (wd / ".cache.json").unlink(missing_ok=True)
+        _stage_json(root, leaf)
+        new_kind, new_cfg = _backend_of(wd)
+        if (new_kind, new_cfg) == (old_kind, old_cfg):
+            skipped.append((leaf, f"already on {_fmt_backend(old_kind, old_cfg)}"))
+            continue
+        plans.append({"leaf": leaf, "wd": wd, "before": before,
+                      "old": (old_kind, old_cfg), "new": (new_kind, new_cfg)})
+
+    for leaf, why in skipped:
+        console.print(f"[dim]skip[/dim]     {leaf}: {why}")
+    if not plans:
+        console.print("[green]nothing to migrate[/green]")
+        return
+
+    t = Table(title="Backend migration plan")
+    t.add_column("Stack", style="cyan")
+    t.add_column("From", style="yellow")
+    t.add_column("To", style="green")
+    t.add_column("Instances", justify="right")
+    t.add_column("Serial", justify="right", style="dim")
+    for p in plans:
+        t.add_row(p["leaf"], _fmt_backend(*p["old"]), _fmt_backend(*p["new"]),
+                  str(p["before"]["instances"]), str(p["before"]["serial"]))
+    console.print(t)
+
+    # The launcher exports PG_CONN_STR from SOPS; when it could not, tofu
+    # fails inside init with a message about the backend rather than about the
+    # missing secret, after the workdir has already been re-rendered.
+    if any(p["new"][0] == "pg" for p in plans) and not os.environ.get("PG_CONN_STR"):
+        console.print("[red]ERROR:[/red] target backend is pg but PG_CONN_STR is unset.")
+        console.print("         Set fleet.settings.backend.pg.connStrSopsPath to the SOPS path "
+                      "holding the libpq connection string.")
+        sys.exit(1)
+
+    if dry_run:
+        console.print("[dim]--dry-run: no state moved.[/dim]")
+        return
+    if not yes:
+        click.confirm(f"Migrate {len(plans)} stack(s)?", abort=True)
+
+    # ── migrate ────────────────────────────────────────────────────
+    backups = Path(backup_dir)
+    backups.mkdir(parents=True, exist_ok=True)
+    failures: list[str] = []
+    for p in plans:
+        leaf, wd, before = p["leaf"], p["wd"], p["before"]
+        console.print(f"── migrate-backend {leaf}: "
+                      f"{_fmt_backend(*p['old'])} → {_fmt_backend(*p['new'])} ──",
+                      style="bold cyan")
+
+        dump = backups / f"{_slug(leaf)}.pre-migrate.tfstate"
+        if dump.exists():
+            # Re-running would overwrite the pre-migration dump with a
+            # post-migration one, destroying the only copy of the thing the
+            # backup exists to protect.
+            console.print(f"[red]FAIL[/red]     {dump} already exists — move it aside first.")
+            failures.append(leaf)
+            continue
+        dump.write_text(before["raw"])
+        console.print(f"[dim]         backed up {before['instances']} instance(s) → {dump}[/dim]")
+
+        # -force-copy answers tofu's own copy prompt: we already confirmed
+        # above, and -input=false turns any further prompt into an error
+        # rather than a hang in a non-interactive run.
+        r = subprocess.run(["tofu", "init", "-migrate-state", "-force-copy", "-input=false"],
+                           cwd=wd, check=False)
+        if r.returncode != 0:
+            console.print(f"[red]FAIL[/red]     `tofu init -migrate-state` exited {r.returncode}. "
+                          f"State is unchanged in the old backend; the dump is at {dump}.")
+            failures.append(leaf)
+            continue
+
+        after = _state_identity(wd)
+        if after is None:
+            console.print(f"[red]FAIL[/red]     init succeeded but the new backend returns no state. "
+                          f"Do NOT apply. Restore with: fleet deploy tf state-push {leaf} {dump}")
+            failures.append(leaf)
+            continue
+
+        problems = []
+        if after["lineage"] != before["lineage"]:
+            problems.append(f"lineage {before['lineage']} → {after['lineage']} "
+                            f"(a DIFFERENT state, not a copy)")
+        if (after["serial"] or 0) < (before["serial"] or 0):
+            problems.append(f"serial went backwards {before['serial']} → {after['serial']}")
+        if after["instances"] != before["instances"]:
+            problems.append(f"instances {before['instances']} → {after['instances']}")
+        if problems:
+            console.print("[red]FAIL[/red]     migrated state does not match the original:")
+            for pr in problems:
+                console.print(f"         - {pr}")
+            console.print(f"         Do NOT apply. The original is at {dump}.")
+            failures.append(leaf)
+            continue
+
+        console.print(f"[green]OK[/green]       {after['instances']} instance(s), "
+                      f"lineage intact, serial {after['serial']}")
+
+    done = len(plans) - len(failures)
+    console.print(f"[bold]migrated {done}/{len(plans)}[/bold]"
+                  + (f" — failed: {', '.join(failures)}" if failures else ""))
+    if failures:
+        sys.exit(1)
+
+
 @tf_stacks.command("state-untaint")
 @click.argument("scope")
 @click.argument("addr")
@@ -741,6 +994,81 @@ def tf_state_export(scope: str, out_dir: str) -> None:
 __all__ = ["tf_stacks"]
 
 
+def _backend_check_pg(root: Path, backend: dict) -> None:
+    """backend-check for the pg backend: connection string, reachability, rights.
+
+    The pg backend fails in its own ways, none of which look like the S3 ones.
+    PG_CONN_STR is resolved by the launcher bootstrap and swallowed on error,
+    so an unset variable reaches tofu as a backend error with no mention of
+    SOPS; and a role that can connect but cannot CREATE produces a permission
+    error only at the moment the FIRST stack tries to make its schema, long
+    after the backend looked fine.
+    """
+    conn = os.environ.get("PG_CONN_STR")
+    path = (_cfg_get_lazy("backend_pg.conn_str_sops_path") or "")
+    if not conn:
+        console.print("[red]FAIL[/red]     PG_CONN_STR is unset.")
+        if not path:
+            console.print("[yellow]  →[/yellow]      fleet.settings.backend.pg.connStrSopsPath "
+                          "is not set, so the launcher had nothing to resolve.")
+        else:
+            console.print(f"[yellow]  →[/yellow]      the launcher tried {path} and got nothing — "
+                          f"check that key exists and that the SOPS file holding its "
+                          f"top-level tree is decryptable.")
+        console.print("[red]VERDICT[/red]  backend NOT healthy — no connection string")
+        sys.exit(1)
+    # Never print the string itself: it carries the password.
+    console.print(f"[green]creds[/green]    PG_CONN_STR resolved"
+                  + (f" from {path}" if path else " from the environment"))
+
+    psql = shutil.which("psql")
+    prefix = [psql] if psql else [
+        "nix", "run", "--inputs-from", str(root), "nixpkgs#postgresql", "--", "psql"]
+    q = ("select current_user, current_database(), "
+         "has_database_privilege(current_user, current_database(), 'CREATE')")
+    r = subprocess.run(prefix + [conn, "-At", "-F", "|", "-c", q],
+                       capture_output=True, text=True, timeout=90, check=False)
+    if r.returncode != 0:
+        last = (r.stderr or "").strip().splitlines()[-1:] or [""]
+        console.print(f"[red]FAIL[/red]     cannot connect: {last[0]}")
+        console.print("[red]VERDICT[/red]  backend NOT healthy — see above")
+        sys.exit(1)
+    user, db, can_create = (r.stdout.strip().split("|") + ["", "", ""])[:3]
+    console.print(f"[green]connect[/green]  {user}@{db}")
+
+    ok = True
+    if can_create != "t":
+        console.print(f"[red]FAIL[/red]     {user} lacks CREATE on {db} — the backend makes one "
+                      f"schema per stack and cannot.")
+        ok = False
+
+    # mkFleet flattens backend.pg.schemaPrefix into the catalog as
+    # `pgSchemaPrefix` (see backend' in flake.nix), so read it under that name.
+    prefix_name = backend.get("pgSchemaPrefix") or "tf_"
+    r = subprocess.run(
+        prefix + [conn, "-At", "-c",
+                  "select schema_name from information_schema.schemata "
+                  f"where schema_name like '{prefix_name}%' order by 1"],
+        capture_output=True, text=True, timeout=90, check=False)
+    schemas = [s for s in (r.stdout or "").split() if s]
+    console.print(f"[green]schemas[/green]  {len(schemas)} stack schema(s) under '{prefix_name}'"
+                  + (f": {', '.join(schemas)}" if schemas else
+                     " — none yet, expected before the first apply or migration"))
+
+    console.print("[green]VERDICT[/green]  backend healthy" if ok
+                  else "[red]VERDICT[/red]  backend NOT healthy — see above")
+    sys.exit(0 if ok else 1)
+
+
+def _cfg_get_lazy(key: str):
+    """config.get without importing at module scope (matches the other call sites)."""
+    from .config import get as _get
+    try:
+        return _get(key)
+    except Exception:
+        return None
+
+
 @tf_stacks.command("backend-check")
 @click.option("--stack", default=None,
               help="Check the backend this stack resolves to (honours perStack overrides).")
@@ -779,6 +1107,9 @@ def tf_backend_check(stack: str | None) -> None:
     if btype == "local":
         console.print("[green]OK[/green]       local state — no credentials, no bucket, "
                       "nothing to check. State lives in .tf/<slug>/terraform.tfstate.")
+        return
+    if btype == "pg":
+        _backend_check_pg(root, backend)
         return
     if per:
         console.print(f"[dim]         per-stack overrides declared for: "
