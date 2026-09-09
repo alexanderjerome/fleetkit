@@ -1016,6 +1016,70 @@ def _cloudflare_record_id(name: str, body: dict) -> str | None:
                      "refusing to guess")
 
 
+def _proxmox_acl_id(name: str, body: dict) -> str | None:
+    """bpg proxmox_acl import id: {path}?{principal}?{role} (bpg docs). The
+    principal is a bare group name, user@realm, or user@realm!token — exactly
+    the field the config already carries, used verbatim (no realm to guess)."""
+    path = body.get("path")
+    role = body.get("role_id")
+    principal = body.get("group_id") or body.get("user_id") or body.get("token_id")
+    if not (path and role and principal):
+        return None
+    return f"{path}?{principal}?{role}"
+
+
+# grafana_folder / grafana_rule_group / grafana_synthetic_monitoring_check all
+# import by a Grafana-assigned id the config does not carry (folder uid, SM
+# check numeric id), so they resolve via the Grafana + SM APIs. The folder <key>
+# -> title map is captured in _adopt_rows so the rule_group resolver can turn a
+# ${grafana_folder.<key>.uid} reference into the title to look the uid up by.
+_grafana_folder_titles_by_key: dict = {}  # grafana_folder <resource key> -> title
+
+
+def _grafana_folder_uid(name: str, body: dict) -> str | None:
+    from . import grafana_api
+    title = body.get("title")
+    if not title:
+        raise RuntimeError("grafana_folder has no title in config")
+    try:
+        return grafana_api.folder_uid(title)
+    except grafana_api.GrafanaError as e:
+        raise RuntimeError(str(e)) from e
+
+
+def _grafana_rule_group_id(name: str, body: dict) -> str | None:
+    import re
+
+    from . import grafana_api
+    grp = body.get("name")
+    if not grp:
+        raise RuntimeError("grafana_rule_group has no name in config")
+    ref = str(body.get("folder_uid") or "")
+    m = re.search(r"grafana_folder\.([A-Za-z0-9_]+)\.uid", ref)
+    ftitle = _grafana_folder_titles_by_key.get(m.group(1)) if m else None
+    if not ftitle:
+        raise RuntimeError(f"cannot resolve folder title (folder_uid={ref!r})")
+    try:
+        fuid = grafana_api.folder_uid(ftitle)
+    except grafana_api.GrafanaError as e:
+        raise RuntimeError(str(e)) from e
+    if not fuid:
+        return None  # folder not created yet — rule group cannot exist either
+    return f"{fuid}:{grp}"
+
+
+def _grafana_sm_check_id(name: str, body: dict) -> str | None:
+    from . import grafana_api
+    job = body.get("job")
+    target = body.get("target")
+    if not (job and target):
+        raise RuntimeError("grafana_synthetic_monitoring_check missing job/target")
+    try:
+        return grafana_api.sm_check_id(job, target)
+    except grafana_api.GrafanaError as e:
+        raise RuntimeError(str(e)) from e
+
+
 # type -> (id_fn(name, body) -> str | None, kind)
 # `kind` is one of:
 #   True     — id is DERIVED from config fields, then VERIFIED against the live
@@ -1044,6 +1108,17 @@ _ADOPT_RESOLVERS: dict = {
     "xenorchestra_vm": (_xoa_vm_uuid, "lookup"),
     "xenorchestra_cloud_config": (_xoa_cloud_config_id, "lookup"),
     "cloudflare_record": (_cloudflare_record_id, "lookup"),
+    # bpg cluster options are a global singleton — import id is the constant
+    # "cluster" (bpg docs), no per-resource derivation.
+    "proxmox_cluster_options": (lambda n, b: "cluster", False),
+    "proxmox_acl": (_proxmox_acl_id, False),
+    # grafana alerting objects import by their config-declared name (the
+    # provider scopes to its own org); no Grafana-assigned id to look up.
+    "grafana_contact_point": (lambda n, b: b.get("name"), False),
+    "grafana_message_template": (lambda n, b: b.get("name"), False),
+    "grafana_folder": (_grafana_folder_uid, "lookup"),
+    "grafana_rule_group": (_grafana_rule_group_id, "lookup"),
+    "grafana_synthetic_monitoring_check": (_grafana_sm_check_id, "lookup"),
 }
 
 # No real-world counterpart: nothing to adopt, ever. Called out explicitly
@@ -1099,6 +1174,23 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
         k: _unwrap(v).get("name")
         for k, v in ((cfg.get("data") or {}).get("cloudflare_zone") or {}).items()
     }
+    # grafana_rule_group references its folder as ${grafana_folder.<key>.uid};
+    # capture <key> -> title so the resolver can look the live uid up by title.
+    global _grafana_folder_titles_by_key
+    _grafana_folder_titles_by_key = {
+        k: _unwrap(v).get("title")
+        for k, v in ((cfg.get("resource") or {}).get("grafana_folder") or {}).items()
+    }
+    # The Grafana + SM API base URLs are literals in the provider block (only
+    # the tokens are SOPS-injected, and those the bootstrap already exports).
+    # Surface the URLs to grafana_api without a second config source of truth.
+    gf = (cfg.get("provider") or {}).get("grafana")
+    gf = _unwrap(gf) if gf else None
+    if isinstance(gf, dict):
+        if gf.get("url"):
+            os.environ.setdefault("GRAFANA_URL", str(gf["url"]))
+        if gf.get("sm_url"):
+            os.environ.setdefault("GRAFANA_SM_URL", str(gf["sm_url"]))
     rows: list[dict] = []
     for rtype, entries in (cfg.get("resource") or {}).items():
         for name, block in entries.items():
