@@ -890,11 +890,212 @@ def tf_backend_check(stack: str | None) -> None:
 # a stale entry, a hand-edited number, or a vmid reused after a destroy all
 # bind the wrong object. Deriving is cheap; being wrong is not.
 
-# type -> (id_fn(name, body) -> str | None, verifiable)
-# Only types whose import-ID FORMAT is certain live here. A guessed ID that
-# happens to parse is the worst outcome available: it binds an address to
-# some other real object, and the next apply "corrects" that object to match
-# the config. Unknown types are reported as manual, never guessed.
+# xenorchestra_vm import ID is the VM's UUID, which the config does NOT carry
+# — XO assigns it at create time. The only stable, config-known handle is the
+# name_label, so the "id derivation" is a live lookup: match the declared
+# name_label against the pool and read back its uuid. name_label is unique per
+# pool in practice but not enforced by XO; list_vms_by_name keys on it, so a
+# duplicate silently collapses to one entry — acceptable here because a real
+# fleet never ships two VMs with the same name_label (the emitter derives it
+# from the unique resource name).
+_xoa_vms_by_name: dict | None = None
+
+
+def _xoa_vm_uuid(name: str, body: dict) -> str | None:
+    """Resolve a declared xenorchestra_vm to its live UUID via the XO API.
+
+    Raises RuntimeError if XO is unreachable — a lookup that could not RUN is
+    not the same answer as a VM that does not EXIST, and the caller must tell
+    them apart. Returns the uuid on a match, or None when no VM carries the
+    declared name_label (genuinely not provisioned yet)."""
+    global _xoa_vms_by_name
+    if _xoa_vms_by_name is None:
+        from . import xoa_api
+        by_name = xoa_api.list_vms_by_name()
+        if by_name is None:
+            raise RuntimeError("XO REST API unreachable (check XOA_URL/XOA_TOKEN)")
+        _xoa_vms_by_name = by_name
+    vm = _xoa_vms_by_name.get(body.get("name_label") or name)
+    return vm.get("uuid") if vm else None
+
+
+# xenorchestra_cloud_config: same story as the VM — XO mints the UUID, and the
+# only config-known handle is the config's `name` (the emitter sets it to
+# "<resource>-cloud-init"). Unlike VMs, cloud-config names are NOT unique in a
+# live XO (hand-made configs, other tools, and re-created sandboxes collide), so
+# this keeps a name -> {ids} multimap and REFUSES a name that resolves to more
+# than one live object rather than binding an arbitrary id. The list is only on
+# XO's JSON-RPC (`cloudConfig.getAll`), not the REST surface xoa_api speaks, so
+# it goes through the xoa-cli websocket client (already a launcher dependency).
+_xoa_cc_ids_by_name: dict | None = None
+
+
+def _xoa_cloud_config_id(name: str, body: dict) -> str | None:
+    """Resolve a declared xenorchestra_cloud_config to its live UUID.
+
+    Raises RuntimeError if XO is unreachable (unknown, not absent) and
+    ValueError if the declared name matches more than one live config
+    (ambiguous — never guessed). Returns the uuid on a unique match, or None
+    when nothing carries the name (not provisioned yet)."""
+    global _xoa_cc_ids_by_name
+    if _xoa_cc_ids_by_name is None:
+        from xoa_cli.api import XoRpc
+        try:
+            with XoRpc() as rpc:
+                configs = rpc.call("cloudConfig.getAll")
+        except Exception as e:
+            raise RuntimeError(f"XO JSON-RPC unreachable: {e}") from e
+        acc: dict = {}
+        for c in configs or []:
+            if isinstance(c, dict) and c.get("name") and c.get("id"):
+                acc.setdefault(c["name"], set()).add(c["id"])
+        _xoa_cc_ids_by_name = acc
+    label = body.get("name") or f"{name}-cloud-init"
+    ids = _xoa_cc_ids_by_name.get(label) or set()
+    if len(ids) > 1:
+        raise ValueError(f"{len(ids)} live cloud configs named {label!r} — "
+                         "ambiguous, refusing to guess")
+    return next(iter(ids), None)
+
+
+# cloudflare_record: the import id is <zone_id>/<record_id>, and NEITHER half
+# is in config — the provider/Cloudflare mint both. The record body carries
+# name/type/content plus a zone_id that is a data-source interpolation
+# ("${data.cloudflare_zone.<key>.id}"), not a literal. So resolve the zone name
+# from that <key> (via the data.cloudflare_zone map captured in _adopt_rows),
+# look the zone id up by name, then the record id up by name+type+content.
+# Cloudflare record names are unique per (name, type, content), so a match on
+# all three is exact; anything ambiguous is refused, never guessed.
+_cf_zone_names_by_key: dict = {}  # data.cloudflare_zone <key> -> zone name; set by _adopt_rows
+
+
+def _cloudflare_record_id(name: str, body: dict) -> str | None:
+    """Resolve a declared cloudflare_record to its import id (zone_id/record_id).
+
+    Raises RuntimeError if Cloudflare is unreachable or the zone/token is
+    missing (unknown, not absent) and ValueError if name+type+content matches
+    more than one live record (ambiguous — never guessed). Returns the import
+    id on a unique match, or None when nothing matches (not provisioned yet)."""
+    import re
+
+    from . import cloudflare_api
+    zid_ref = str(body.get("zone_id") or "")
+    m = re.search(r"cloudflare_zone\.([A-Za-z0-9_]+)\.id", zid_ref)
+    zone_name = _cf_zone_names_by_key.get(m.group(1)) if m else None
+    if not zone_name:
+        raise RuntimeError(f"cannot resolve zone name (zone_id={zid_ref!r})")
+    try:
+        zid = cloudflare_api.zone_id(zone_name)
+    except cloudflare_api.CloudflareError as e:
+        raise RuntimeError(str(e)) from e
+    if not zid:
+        raise RuntimeError(f"token cannot see zone {zone_name!r}")
+    sub = str(body.get("name") or "")
+    fqdn = zone_name if sub in ("", "@") else f"{sub}.{zone_name}"
+    rtype = str(body.get("type") or "A")
+    content = str(body.get("content") or "")
+    try:
+        recs = cloudflare_api.list_dns_records(zid, fqdn, rtype)
+    except cloudflare_api.CloudflareError as e:
+        raise RuntimeError(str(e)) from e
+    if not recs:
+        return None                              # genuinely not provisioned yet
+    if len(recs) == 1:
+        # The one record at this name+type IS the object this entry manages.
+        # If its content has drifted from config, that surfaces as an in-place
+        # update in the post-adopt plan (--allow-updates) — not a reason to
+        # refuse the import, and never a reason to bind a different object.
+        return f"{zid}/{recs[0]['id']}"
+    # Multiple records share this name+type (round-robin). content picks the one
+    # this entry means; if it can't pick exactly one, refuse rather than guess.
+    matched = [r for r in recs if r.get("content") == content]
+    if len(matched) == 1:
+        return f"{zid}/{matched[0]['id']}"
+    raise ValueError(f"{len(recs)} live {rtype} records at {fqdn!r}, "
+                     f"{len(matched)} match content {content!r} — ambiguous, "
+                     "refusing to guess")
+
+
+def _proxmox_acl_id(name: str, body: dict) -> str | None:
+    """bpg proxmox_acl import id: {path}?{principal}?{role} (bpg docs). The
+    principal is a bare group name, user@realm, or user@realm!token — exactly
+    the field the config already carries, used verbatim (no realm to guess)."""
+    path = body.get("path")
+    role = body.get("role_id")
+    principal = body.get("group_id") or body.get("user_id") or body.get("token_id")
+    if not (path and role and principal):
+        return None
+    return f"{path}?{principal}?{role}"
+
+
+# grafana_folder / grafana_rule_group / grafana_synthetic_monitoring_check all
+# import by a Grafana-assigned id the config does not carry (folder uid, SM
+# check numeric id), so they resolve via the Grafana + SM APIs. The folder <key>
+# -> title map is captured in _adopt_rows so the rule_group resolver can turn a
+# ${grafana_folder.<key>.uid} reference into the title to look the uid up by.
+_grafana_folder_titles_by_key: dict = {}  # grafana_folder <resource key> -> title
+
+
+def _grafana_folder_uid(name: str, body: dict) -> str | None:
+    from . import grafana_api
+    title = body.get("title")
+    if not title:
+        raise RuntimeError("grafana_folder has no title in config")
+    try:
+        return grafana_api.folder_uid(title)
+    except grafana_api.GrafanaError as e:
+        raise RuntimeError(str(e)) from e
+
+
+def _grafana_rule_group_id(name: str, body: dict) -> str | None:
+    import re
+
+    from . import grafana_api
+    grp = body.get("name")
+    if not grp:
+        raise RuntimeError("grafana_rule_group has no name in config")
+    ref = str(body.get("folder_uid") or "")
+    m = re.search(r"grafana_folder\.([A-Za-z0-9_]+)\.uid", ref)
+    ftitle = _grafana_folder_titles_by_key.get(m.group(1)) if m else None
+    if not ftitle:
+        raise RuntimeError(f"cannot resolve folder title (folder_uid={ref!r})")
+    try:
+        fuid = grafana_api.folder_uid(ftitle)
+    except grafana_api.GrafanaError as e:
+        raise RuntimeError(str(e)) from e
+    if not fuid:
+        return None  # folder not created yet — rule group cannot exist either
+    return f"{fuid}:{grp}"
+
+
+def _grafana_sm_check_id(name: str, body: dict) -> str | None:
+    from . import grafana_api
+    job = body.get("job")
+    target = body.get("target")
+    if not (job and target):
+        raise RuntimeError("grafana_synthetic_monitoring_check missing job/target")
+    try:
+        return grafana_api.sm_check_id(job, target)
+    except grafana_api.GrafanaError as e:
+        raise RuntimeError(str(e)) from e
+
+
+# type -> (id_fn(name, body) -> str | None, kind)
+# `kind` is one of:
+#   True     — id is DERIVED from config fields, then VERIFIED against the live
+#              provider before use (containers/vms: the vmid is unique but could
+#              still point at the wrong object; the check confirms identity).
+#   False    — id is DERIVED from config and its FORMAT is certain, but there is
+#              no cheap live check (pools/groups: the id simply IS the name).
+#   "lookup" — id is NOT in the config at all; it must be FETCHED from the
+#              provider by a stable natural key (xenorchestra_vm: XO mints the
+#              UUID at create time, so we match on name_label). The fetch is both
+#              the derivation and the verification — a miss means the object does
+#              not exist; an unreachable provider means the answer is unknown.
+# Only types whose import-ID is derivable this way live here. A guessed ID that
+# happens to parse is the worst outcome available: it binds an address to some
+# other real object, and the next apply "corrects" that object to match the
+# config. Unknown types are reported as manual, never guessed.
 _ADOPT_RESOLVERS: dict = {
     "proxmox_virtual_environment_container":
         (lambda n, b: f"{b['node_name']}/{b['vm_id']}" if b.get("vm_id") else None, True),
@@ -904,6 +1105,20 @@ _ADOPT_RESOLVERS: dict = {
         (lambda n, b: b.get("pool_id"), False),
     "proxmox_virtual_environment_group":
         (lambda n, b: b.get("group_id"), False),
+    "xenorchestra_vm": (_xoa_vm_uuid, "lookup"),
+    "xenorchestra_cloud_config": (_xoa_cloud_config_id, "lookup"),
+    "cloudflare_record": (_cloudflare_record_id, "lookup"),
+    # bpg cluster options are a global singleton — import id is the constant
+    # "cluster" (bpg docs), no per-resource derivation.
+    "proxmox_cluster_options": (lambda n, b: "cluster", False),
+    "proxmox_acl": (_proxmox_acl_id, False),
+    # grafana alerting objects import by their config-declared name (the
+    # provider scopes to its own org); no Grafana-assigned id to look up.
+    "grafana_contact_point": (lambda n, b: b.get("name"), False),
+    "grafana_message_template": (lambda n, b: b.get("name"), False),
+    "grafana_folder": (_grafana_folder_uid, "lookup"),
+    "grafana_rule_group": (_grafana_rule_group_id, "lookup"),
+    "grafana_synthetic_monitoring_check": (_grafana_sm_check_id, "lookup"),
 }
 
 # No real-world counterpart: nothing to adopt, ever. Called out explicitly
@@ -951,6 +1166,31 @@ def _verify_pve(vmid: int, node: str, expect: str) -> tuple[bool, str]:
 
 def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
     cfg = json.loads((wd / "config.tf.json").read_text())
+    # cloudflare_record bodies reference their zone via a data-source
+    # interpolation, not a literal id, so capture the data.cloudflare_zone
+    # <key> -> zone name map here for _cloudflare_record_id to dereference.
+    global _cf_zone_names_by_key
+    _cf_zone_names_by_key = {
+        k: _unwrap(v).get("name")
+        for k, v in ((cfg.get("data") or {}).get("cloudflare_zone") or {}).items()
+    }
+    # grafana_rule_group references its folder as ${grafana_folder.<key>.uid};
+    # capture <key> -> title so the resolver can look the live uid up by title.
+    global _grafana_folder_titles_by_key
+    _grafana_folder_titles_by_key = {
+        k: _unwrap(v).get("title")
+        for k, v in ((cfg.get("resource") or {}).get("grafana_folder") or {}).items()
+    }
+    # The Grafana + SM API base URLs are literals in the provider block (only
+    # the tokens are SOPS-injected, and those the bootstrap already exports).
+    # Surface the URLs to grafana_api without a second config source of truth.
+    gf = (cfg.get("provider") or {}).get("grafana")
+    gf = _unwrap(gf) if gf else None
+    if isinstance(gf, dict):
+        if gf.get("url"):
+            os.environ.setdefault("GRAFANA_URL", str(gf["url"]))
+        if gf.get("sm_url"):
+            os.environ.setdefault("GRAFANA_SM_URL", str(gf["sm_url"]))
     rows: list[dict] = []
     for rtype, entries in (cfg.get("resource") or {}).items():
         for name, block in entries.items():
@@ -969,7 +1209,36 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                 rows.append({"addr": addr, "id": "", "state": "manual",
                              "note": f"no resolver for {rtype} — import by hand"})
                 continue
-            id_fn, verifiable = resolver
+            id_fn, kind = resolver
+
+            # A "lookup" resolver reaches the provider: the import ID is not in
+            # config (the provider mints it), so the fetch IS the derivation and
+            # the verification at once. Under --no-verify there is nothing left
+            # to go on, so the address is punted to manual rather than guessed.
+            if kind == "lookup":
+                if not verify:
+                    rows.append({"addr": addr, "id": "", "state": "manual",
+                                 "note": "provider-assigned id — needs a live "
+                                         "lookup, refused under --no-verify"})
+                    continue
+                try:
+                    rid = id_fn(name, body)
+                except Exception as e:
+                    # The lookup could not yield a confirmed single id — either
+                    # the provider was unreachable (unknown, NOT absent) or the
+                    # key was ambiguous. Never adopt on a guess; surface the
+                    # reason so the operator fixes creds or the collision.
+                    rows.append({"addr": addr, "id": "", "state": "unverified",
+                                 "note": f"lookup inconclusive: {e}"})
+                    continue
+                if not rid:
+                    rows.append({"addr": addr, "id": "", "state": "not-found",
+                                 "note": "no live object matches the declared name"})
+                    continue
+                rows.append({"addr": addr, "id": rid, "state": "adopt",
+                             "note": "resolved via provider API"})
+                continue
+
             try:
                 rid = id_fn(name, body)
             except Exception as e:
@@ -981,7 +1250,7 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                 rows.append({"addr": addr, "id": "", "state": "manual",
                              "note": "id fields absent from config"})
                 continue
-            if verify and verifiable and "/" in str(rid):
+            if verify and kind and "/" in str(rid):
                 node, vmid = str(rid).split("/", 1)
                 verdict, detail = _verify_pve(vmid, node, _expected_hostname(name, body))
                 if verdict == "absent":
@@ -999,7 +1268,7 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                                  "note": detail})
                     continue
             rows.append({"addr": addr, "id": rid, "state": "adopt",
-                         "note": "verified" if (verify and verifiable) else "derived"})
+                         "note": "verified" if (verify and kind) else "derived"})
     return sorted(rows, key=lambda r: r["addr"])
 
 

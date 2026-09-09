@@ -79,7 +79,9 @@ let
     !(builtins.tryEval
         (builtins.deepSeq collisionEval.config.fleet.compute true)).success;
 
-  fleetPkg = pkgs.callPackage ./pkgs/_launcher { };
+  fleetPkg = pkgs.callPackage ./pkgs/_launcher {
+    xoa-cli = pkgs.callPackage ./pkgs/xoa-cli { };
+  };
 
   golden = mkFleet {
     modules = [ ./checks/fixtures/compute-surface ];

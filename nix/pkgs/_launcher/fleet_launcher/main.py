@@ -347,6 +347,39 @@ def _setup_env() -> None:
     except Exception:
         pass
 
+    # Cloudflare API token — read-only zone/record lookups for the `tf adopt`
+    # cloudflare_record resolver (INFRA-274). The terraform provider reads the
+    # same secret via data.sops_file at apply time; this is the pre-apply path
+    # a Python resolver needs.
+    try:
+        result = subprocess.run(
+            [sops, "-d", "--extract",
+             '["integrations"]["cloudflare"]["api_token"]', secrets_file],
+            capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            _setenv_if_blank("CLOUDFLARE_API_TOKEN", result.stdout.strip())
+    except Exception:
+        pass
+
+    # Grafana Cloud tokens — read-only folder/alerting + Synthetic-Monitoring
+    # lookups for the `tf adopt` grafana_* resolvers (INFRA-274). URLs are
+    # literals in the provider block (surfaced by the adopt path itself); only
+    # the tokens are secret. The provider reads the same secrets at apply time.
+    for sops_key, env_var in (
+        ('["integrations"]["grafana_cloud"]["service_account"]["token"]',
+         "GRAFANA_AUTH"),
+        ('["integrations"]["grafana_cloud"]["sm"]["access_token"]',
+         "GRAFANA_SM_TOKEN"),
+    ):
+        try:
+            result = subprocess.run(
+                [sops, "-d", "--extract", sops_key, secrets_file],
+                capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                _setenv_if_blank(env_var, result.stdout.strip())
+        except Exception:
+            pass
+
 
 def _maybe_reexec_for_missing_tools() -> None:
     """Re-exec fleet inside `nix develop` when required external tools are absent.

@@ -3,6 +3,10 @@
 , sops
 , opentofu
 , age
+  # Standalone XO library+CLI (flake package). Imported by the `tf adopt`
+  # resolvers for JSON-RPC lookups (xoa_cli.api.XoRpc — cloud-config UUIDs,
+  # INFRA-274); the `fleet xoa` shim still soft-imports its click group.
+, xoa-cli
   # The framework ansible tree (playbooks + roles) that ships with
   # fleetkit. Baked into the wrapper as $FLEET_ANSIBLE_DIR so
   # `fleet ansible run` and the env bootstrap can resolve framework
@@ -27,12 +31,14 @@ python3.pkgs.buildPythonApplication {
     setuptools
   ];
 
-  dependencies = with python3.pkgs; [
+  dependencies = (with python3.pkgs; [
     click
     rich
     pyyaml
     proxmoxer
     requests
+  ]) ++ [
+    xoa-cli  # importable: xoa_cli.api.XoRpc for adopt JSON-RPC lookups
   ];
 
   # Runtime-dep check dropped: optional integrations import lazily. Drop
