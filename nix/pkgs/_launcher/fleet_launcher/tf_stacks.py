@@ -890,11 +890,51 @@ def tf_backend_check(stack: str | None) -> None:
 # a stale entry, a hand-edited number, or a vmid reused after a destroy all
 # bind the wrong object. Deriving is cheap; being wrong is not.
 
-# type -> (id_fn(name, body) -> str | None, verifiable)
-# Only types whose import-ID FORMAT is certain live here. A guessed ID that
-# happens to parse is the worst outcome available: it binds an address to
-# some other real object, and the next apply "corrects" that object to match
-# the config. Unknown types are reported as manual, never guessed.
+# xenorchestra_vm import ID is the VM's UUID, which the config does NOT carry
+# — XO assigns it at create time. The only stable, config-known handle is the
+# name_label, so the "id derivation" is a live lookup: match the declared
+# name_label against the pool and read back its uuid. name_label is unique per
+# pool in practice but not enforced by XO; list_vms_by_name keys on it, so a
+# duplicate silently collapses to one entry — acceptable here because a real
+# fleet never ships two VMs with the same name_label (the emitter derives it
+# from the unique resource name).
+_xoa_vms_by_name: dict | None = None
+
+
+def _xoa_vm_uuid(name: str, body: dict) -> str | None:
+    """Resolve a declared xenorchestra_vm to its live UUID via the XO API.
+
+    Raises RuntimeError if XO is unreachable — a lookup that could not RUN is
+    not the same answer as a VM that does not EXIST, and the caller must tell
+    them apart. Returns the uuid on a match, or None when no VM carries the
+    declared name_label (genuinely not provisioned yet)."""
+    global _xoa_vms_by_name
+    if _xoa_vms_by_name is None:
+        from . import xoa_api
+        by_name = xoa_api.list_vms_by_name()
+        if by_name is None:
+            raise RuntimeError("XO REST API unreachable (check XOA_URL/XOA_TOKEN)")
+        _xoa_vms_by_name = by_name
+    vm = _xoa_vms_by_name.get(body.get("name_label") or name)
+    return vm.get("uuid") if vm else None
+
+
+# type -> (id_fn(name, body) -> str | None, kind)
+# `kind` is one of:
+#   True     — id is DERIVED from config fields, then VERIFIED against the live
+#              provider before use (containers/vms: the vmid is unique but could
+#              still point at the wrong object; the check confirms identity).
+#   False    — id is DERIVED from config and its FORMAT is certain, but there is
+#              no cheap live check (pools/groups: the id simply IS the name).
+#   "lookup" — id is NOT in the config at all; it must be FETCHED from the
+#              provider by a stable natural key (xenorchestra_vm: XO mints the
+#              UUID at create time, so we match on name_label). The fetch is both
+#              the derivation and the verification — a miss means the object does
+#              not exist; an unreachable provider means the answer is unknown.
+# Only types whose import-ID is derivable this way live here. A guessed ID that
+# happens to parse is the worst outcome available: it binds an address to some
+# other real object, and the next apply "corrects" that object to match the
+# config. Unknown types are reported as manual, never guessed.
 _ADOPT_RESOLVERS: dict = {
     "proxmox_virtual_environment_container":
         (lambda n, b: f"{b['node_name']}/{b['vm_id']}" if b.get("vm_id") else None, True),
@@ -904,6 +944,7 @@ _ADOPT_RESOLVERS: dict = {
         (lambda n, b: b.get("pool_id"), False),
     "proxmox_virtual_environment_group":
         (lambda n, b: b.get("group_id"), False),
+    "xenorchestra_vm": (_xoa_vm_uuid, "lookup"),
 }
 
 # No real-world counterpart: nothing to adopt, ever. Called out explicitly
@@ -969,7 +1010,34 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                 rows.append({"addr": addr, "id": "", "state": "manual",
                              "note": f"no resolver for {rtype} — import by hand"})
                 continue
-            id_fn, verifiable = resolver
+            id_fn, kind = resolver
+
+            # A "lookup" resolver reaches the provider: the import ID is not in
+            # config (the provider mints it), so the fetch IS the derivation and
+            # the verification at once. Under --no-verify there is nothing left
+            # to go on, so the address is punted to manual rather than guessed.
+            if kind == "lookup":
+                if not verify:
+                    rows.append({"addr": addr, "id": "", "state": "manual",
+                                 "note": "provider-assigned id — needs a live "
+                                         "lookup, refused under --no-verify"})
+                    continue
+                try:
+                    rid = id_fn(name, body)
+                except Exception as e:
+                    # Could not reach/query the provider: unknown, NOT absent —
+                    # surface it so the operator fixes creds, not the config.
+                    rows.append({"addr": addr, "id": "", "state": "unverified",
+                                 "note": f"provider lookup failed: {e}"})
+                    continue
+                if not rid:
+                    rows.append({"addr": addr, "id": "", "state": "not-found",
+                                 "note": "no live object matches the declared name"})
+                    continue
+                rows.append({"addr": addr, "id": rid, "state": "adopt",
+                             "note": "resolved via provider API"})
+                continue
+
             try:
                 rid = id_fn(name, body)
             except Exception as e:
@@ -981,7 +1049,7 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                 rows.append({"addr": addr, "id": "", "state": "manual",
                              "note": "id fields absent from config"})
                 continue
-            if verify and verifiable and "/" in str(rid):
+            if verify and kind and "/" in str(rid):
                 node, vmid = str(rid).split("/", 1)
                 verdict, detail = _verify_pve(vmid, node, _expected_hostname(name, body))
                 if verdict == "absent":
@@ -999,7 +1067,7 @@ def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
                                  "note": detail})
                     continue
             rows.append({"addr": addr, "id": rid, "state": "adopt",
-                         "note": "verified" if (verify and verifiable) else "derived"})
+                         "note": "verified" if (verify and kind) else "derived"})
     return sorted(rows, key=lambda r: r["addr"])
 
 
