@@ -1124,16 +1124,21 @@ _ADOPT_RESOLVERS: dict = {
 # No real-world counterpart: nothing to adopt, ever. Called out explicitly
 # because they are silently RE-CREATED on the next apply — and a resource
 # that generates a credential would rotate a live secret when it is.
+# ansible_host/ansible_playbook are local inventory state + a playbook runner
+# (no remote object, no import support in the provider), so they live here too.
 _UNIMPORTABLE = {"terraform_data", "random_password", "random_id",
-                 "random_string", "tls_private_key"}
+                 "random_string", "tls_private_key",
+                 "ansible_host", "ansible_playbook"}
 
 # The subset of _UNIMPORTABLE that is safe to leave PENDING during an adopt: it
 # holds no state worth preserving and generates no secret, so its create in the
 # post-import plan is inherent (nothing to import) rather than a wrong-id
 # signal, and adopt leaves it for a later real apply instead of executing it.
-# terraform_data (provisioner runners — e.g. the XO boot-order setters) belongs
-# here; random_*/tls_private_key do NOT — recreating those rotates a live value.
-_RECREATE_SAFE = {"terraform_data"}
+# terraform_data (provisioner runners — e.g. the XO boot-order setters) and the
+# ansible_* resources (inventory + playbook runner, fully reconstructed from
+# config) belong here; random_*/tls_private_key do NOT — recreating those
+# rotates a live value.
+_RECREATE_SAFE = {"terraform_data", "ansible_host", "ansible_playbook"}
 
 
 def _unwrap(block):
