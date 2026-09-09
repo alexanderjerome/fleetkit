@@ -24,7 +24,6 @@ Destruction safety:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -49,53 +48,17 @@ console = Console()
 #   .tf/.cache/stack-ids.json   stack enumeration (replaces a 2-min eval)
 #   .tf/<slug>/.cache.json      per-stack config.tf.json freshness marker
 #
-# Cache key = SHA256 of every file that could materially affect terranix
-# output: flake.lock + every .nix under nix/fleet, nix/hosts (per-host
-# fleet.compute entries), nix/tf (emitters) and nix/lib (emitter
-# helpers). False positives (rebuilding when output would be identical)
-# are cheap because Nix dedups in its store; false negatives would be
-# incorrect, so the fingerprint stays conservative.
-
-def _fingerprint_paths(root: Path) -> list[Path]:
-    """Every file whose content can change terranix output.
-
-    Enumerated from git rather than a hardcoded directory list. The list was
-    fleetkit's OWN layout (nix/fleet, nix/hosts, nix/tf, nix/lib), none of
-    which exists in a consumer — a consumer keeps its data in ./fleet and its
-    stacks in ./tofu. There the fingerprint collapsed to flake.lock alone, so
-    every edit to the consumer's own fleet served a STALE config.tf.json until
-    something moved the lock. A backend switch in particular became a silent
-    no-op: the cache handed back the old backend block and the migration had
-    nothing to migrate.
-
-    Tracked-only is the right filter, not a limitation: an untracked .nix is
-    invisible to flake eval too ("path does not exist in Git repository"), so
-    it cannot affect the output being fingerprinted.
-    """
-    try:
-        out = subprocess.check_output(
-            ["git", "-C", str(root), "ls-files", "-z", "--", "*.nix", "flake.lock"],
-            text=True, stderr=subprocess.DEVNULL)
-        rel = [p for p in out.split("\0") if p and not p.startswith(".tf/")]
-        return sorted({root / p for p in rel} | {root / "flake.lock"})
-    except (subprocess.CalledProcessError, OSError):
-        # Not a git checkout. Flake eval would fail here anyway; fall back to
-        # fleetkit's own layout so the CLI stays usable in a store copy.
-        return sorted({root / "flake.lock"} | {
-            p for d in ("fleet", "hosts", "tf", "lib")
-            for p in (root / "nix" / d).rglob("*.nix")})
-
+# Cache key = config.source_fingerprint — SHA256 over every tracked .nix
+# plus flake.lock. Shared with the catalog cache in config.py on purpose:
+# both caches answer "has the fleet's Nix source moved?", and when only one
+# of them noticed a change the CLI acted on two different views of the same
+# fleet. False positives (rebuilding when output would be identical) are
+# cheap because Nix dedups in its store; false negatives are incorrect, so
+# the fingerprint stays conservative.
 
 def _input_hash(root: Path) -> str:
-    h = hashlib.sha256()
-    for p in _fingerprint_paths(root):
-        if not p.exists():
-            continue
-        h.update(str(p.relative_to(root)).encode())
-        h.update(b"\0")
-        h.update(p.read_bytes())
-        h.update(b"\0")
-    return h.hexdigest()
+    from .config import source_fingerprint
+    return source_fingerprint(root) or ""
 
 
 def _cache_dir(root: Path) -> Path:

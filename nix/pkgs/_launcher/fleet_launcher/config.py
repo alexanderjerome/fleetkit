@@ -12,7 +12,7 @@ longer offers. A lingering fleet.toml warns loudly and is ignored.
 Design notes:
   * Eval-free reads stay eval-free: the catalog is a cached artifact
     (the hosts.json pattern), auto-materialized when missing and
-    refreshed when the repo's `nix/` tree hash changes. Set
+    refreshed when the repo's tracked Nix sources change. Set
     FLEET_NO_CATALOG_REFRESH=1 to forbid the refresh (offline/CI).
   * The dotted lookup paths (`domains.base`, `pve.install.serve_host`,
     …) are preserved verbatim from the toml era, so get()/require()
@@ -26,6 +26,7 @@ Design notes:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -71,20 +72,58 @@ def _warn(msg: str) -> None:
     click.echo(f"warning: {msg}", err=True)
 
 
-def _source_tree_hash(root: Path) -> str | None:
-    """Cheap staleness fingerprint: the git tree hash of nix/ at HEAD.
+def fingerprint_paths(root: Path) -> list[Path]:
+    """Every tracked file whose content can change a Nix-built artifact.
 
-    Dirty (uncommitted) nix/ edits do not bump it — the same accepted
-    blind spot hosts.json has always had; ops commands refresh both.
+    Enumerated from git rather than a hardcoded directory list. Both the
+    catalog cache here and the terranix caches in `tf_stacks` key off this,
+    because both answer the same question: has the fleet's Nix source moved?
+
+    Tracked-only is the right filter, not a limitation: an untracked .nix is
+    invisible to flake eval too ("path does not exist in Git repository"), so
+    it cannot affect the output being fingerprinted. Generated trees under
+    .tf/ are excluded — they are the output, not an input.
     """
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD:nix"],
-            cwd=root, capture_output=True, text=True, timeout=10,
-        )
-        return out.stdout.strip() if out.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
+        out = subprocess.check_output(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "*.nix", "flake.lock"],
+            text=True, stderr=subprocess.DEVNULL)
+        rel = [p for p in out.split("\0") if p and not p.startswith(".tf/")]
+        return sorted({root / p for p in rel} | {root / "flake.lock"})
+    except (subprocess.CalledProcessError, OSError):
+        # Not a git checkout. Flake eval would fail here anyway; fall back to
+        # fleetkit's own layout so the CLI stays usable in a store copy.
+        return sorted({root / "flake.lock"} | {
+            p for d in ("fleet", "hosts", "tf", "lib")
+            for p in (root / "nix" / d).rglob("*.nix")})
+
+
+def source_fingerprint(root: Path) -> str | None:
+    """SHA256 over `fingerprint_paths`, or None outside a usable checkout.
+
+    Content, not `git rev-parse HEAD:nix`, which is what this used to be.
+    That tree hash was fleetkit's OWN layout: a consumer keeps its fleet data
+    in ./fleet, so HEAD:nix pointed at a directory the consumer's settings do
+    not live in and the recorded value never moved. The catalog was therefore
+    materialized once and never refreshed — every `fleet` command served the
+    settings that happened to be in effect on first run. A backend switch is
+    the worst case: the CLI reads the OLD backend, so `migrate-backend` sees
+    nothing to migrate and `apply` writes state to the backend being retired.
+
+    Uncommitted edits count, which the tree hash also could not see.
+    """
+    paths = fingerprint_paths(root)
+    if not any(p.exists() for p in paths):
         return None
+    h = hashlib.sha256()
+    for p in paths:
+        if not p.exists():
+            continue
+        h.update(str(p.relative_to(root)).encode())
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
 
 
 def _materialize_catalog(root: Path, dest: Path) -> bool:
@@ -105,7 +144,7 @@ def _materialize_catalog(root: Path, dest: Path) -> bool:
     tmp = dest.with_suffix(".json.tmp")
     tmp.write_text(store_path.read_text())
     tmp.replace(dest)
-    if (src := _source_tree_hash(root)) is not None:
+    if (src := source_fingerprint(root)) is not None:
         dest.with_suffix(".src").write_text(src + "\n")
     return True
 
@@ -140,16 +179,16 @@ def catalog_path() -> Path | None:
         click.echo("Materializing .cache/fleet/catalog.json (first run)…", err=True)
         return dest if _materialize_catalog(root, dest) else None
 
-    # Refresh when the nix/ tree changed since generation.
+    # Refresh when any tracked Nix source changed since generation.
     src_file = dest.with_suffix(".src")
     recorded = src_file.read_text().strip() if src_file.is_file() else None
-    current = _source_tree_hash(root)
+    current = source_fingerprint(root)
     if current is not None and recorded != current:
         if refresh_allowed:
-            click.echo("fleet catalog stale (nix/ changed) — refreshing…", err=True)
+            click.echo("fleet catalog stale (nix sources changed) — refreshing…", err=True)
             _materialize_catalog(root, dest)  # failure warned; stale copy still used
         else:
-            _warn("fleet catalog is stale (nix/ changed) and "
+            _warn("fleet catalog is stale (nix sources changed) and "
                   f"${ENV_NO_REFRESH} forbids refreshing it")
     return dest
 
