@@ -405,9 +405,17 @@ in rec {
       # be destroyed"). Ignore the whole operating_system block so applies stop
       # trying to destroy+recreate live containers. CREATE is unaffected (a fresh
       # CT still uses the current nix-store template); clones have no such block.
+      #
+      # `initialization` (hostname/dns/ip_config + user_account SSH keys) is the
+      # same failure mode: it is ForceNew and the provider can't read it back from
+      # a live CT, so `tofu import`/`tf adopt` sees the config's block as an ADD →
+      # ForceNew replace → blocked by prevent_destroy. It is create-only data
+      # (keys are injected once; changing them needs a recreate regardless), so
+      # ignoring post-create drift is correct and makes state adoption a pure
+      # operation. CREATE still emits it.
       lifecycleMeta =
         if isClone then meta
-        else meta // { ignore_changes = (meta.ignore_changes or []) ++ [ "operating_system" ]; };
+        else meta // { ignore_changes = (meta.ignore_changes or []) ++ [ "operating_system" "initialization" ]; };
     in {
       provider = "proxmox.${builtins.elemAt (lib.strings.splitString "." meta.provider_instance) 1}";
       node_name = resolveNode meta;
