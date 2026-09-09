@@ -958,6 +958,64 @@ def _xoa_cloud_config_id(name: str, body: dict) -> str | None:
     return next(iter(ids), None)
 
 
+# cloudflare_record: the import id is <zone_id>/<record_id>, and NEITHER half
+# is in config — the provider/Cloudflare mint both. The record body carries
+# name/type/content plus a zone_id that is a data-source interpolation
+# ("${data.cloudflare_zone.<key>.id}"), not a literal. So resolve the zone name
+# from that <key> (via the data.cloudflare_zone map captured in _adopt_rows),
+# look the zone id up by name, then the record id up by name+type+content.
+# Cloudflare record names are unique per (name, type, content), so a match on
+# all three is exact; anything ambiguous is refused, never guessed.
+_cf_zone_names_by_key: dict = {}  # data.cloudflare_zone <key> -> zone name; set by _adopt_rows
+
+
+def _cloudflare_record_id(name: str, body: dict) -> str | None:
+    """Resolve a declared cloudflare_record to its import id (zone_id/record_id).
+
+    Raises RuntimeError if Cloudflare is unreachable or the zone/token is
+    missing (unknown, not absent) and ValueError if name+type+content matches
+    more than one live record (ambiguous — never guessed). Returns the import
+    id on a unique match, or None when nothing matches (not provisioned yet)."""
+    import re
+
+    from . import cloudflare_api
+    zid_ref = str(body.get("zone_id") or "")
+    m = re.search(r"cloudflare_zone\.([A-Za-z0-9_]+)\.id", zid_ref)
+    zone_name = _cf_zone_names_by_key.get(m.group(1)) if m else None
+    if not zone_name:
+        raise RuntimeError(f"cannot resolve zone name (zone_id={zid_ref!r})")
+    try:
+        zid = cloudflare_api.zone_id(zone_name)
+    except cloudflare_api.CloudflareError as e:
+        raise RuntimeError(str(e)) from e
+    if not zid:
+        raise RuntimeError(f"token cannot see zone {zone_name!r}")
+    sub = str(body.get("name") or "")
+    fqdn = zone_name if sub in ("", "@") else f"{sub}.{zone_name}"
+    rtype = str(body.get("type") or "A")
+    content = str(body.get("content") or "")
+    try:
+        recs = cloudflare_api.list_dns_records(zid, fqdn, rtype)
+    except cloudflare_api.CloudflareError as e:
+        raise RuntimeError(str(e)) from e
+    if not recs:
+        return None                              # genuinely not provisioned yet
+    if len(recs) == 1:
+        # The one record at this name+type IS the object this entry manages.
+        # If its content has drifted from config, that surfaces as an in-place
+        # update in the post-adopt plan (--allow-updates) — not a reason to
+        # refuse the import, and never a reason to bind a different object.
+        return f"{zid}/{recs[0]['id']}"
+    # Multiple records share this name+type (round-robin). content picks the one
+    # this entry means; if it can't pick exactly one, refuse rather than guess.
+    matched = [r for r in recs if r.get("content") == content]
+    if len(matched) == 1:
+        return f"{zid}/{matched[0]['id']}"
+    raise ValueError(f"{len(recs)} live {rtype} records at {fqdn!r}, "
+                     f"{len(matched)} match content {content!r} — ambiguous, "
+                     "refusing to guess")
+
+
 # type -> (id_fn(name, body) -> str | None, kind)
 # `kind` is one of:
 #   True     — id is DERIVED from config fields, then VERIFIED against the live
@@ -985,6 +1043,7 @@ _ADOPT_RESOLVERS: dict = {
         (lambda n, b: b.get("group_id"), False),
     "xenorchestra_vm": (_xoa_vm_uuid, "lookup"),
     "xenorchestra_cloud_config": (_xoa_cloud_config_id, "lookup"),
+    "cloudflare_record": (_cloudflare_record_id, "lookup"),
 }
 
 # No real-world counterpart: nothing to adopt, ever. Called out explicitly
@@ -1032,6 +1091,14 @@ def _verify_pve(vmid: int, node: str, expect: str) -> tuple[bool, str]:
 
 def _adopt_rows(wd: Path, verify: bool, in_state: set[str]) -> list[dict]:
     cfg = json.loads((wd / "config.tf.json").read_text())
+    # cloudflare_record bodies reference their zone via a data-source
+    # interpolation, not a literal id, so capture the data.cloudflare_zone
+    # <key> -> zone name map here for _cloudflare_record_id to dereference.
+    global _cf_zone_names_by_key
+    _cf_zone_names_by_key = {
+        k: _unwrap(v).get("name")
+        for k, v in ((cfg.get("data") or {}).get("cloudflare_zone") or {}).items()
+    }
     rows: list[dict] = []
     for rtype, entries in (cfg.get("resource") or {}).items():
         for name, block in entries.items():
