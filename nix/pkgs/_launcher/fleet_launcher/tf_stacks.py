@@ -1127,6 +1127,14 @@ _ADOPT_RESOLVERS: dict = {
 _UNIMPORTABLE = {"terraform_data", "random_password", "random_id",
                  "random_string", "tls_private_key"}
 
+# The subset of _UNIMPORTABLE that is safe to leave PENDING during an adopt: it
+# holds no state worth preserving and generates no secret, so its create in the
+# post-import plan is inherent (nothing to import) rather than a wrong-id
+# signal, and adopt leaves it for a later real apply instead of executing it.
+# terraform_data (provisioner runners — e.g. the XO boot-order setters) belongs
+# here; random_*/tls_private_key do NOT — recreating those rotates a live value.
+_RECREATE_SAFE = {"terraform_data"}
+
 
 def _unwrap(block):
     """terranix emits a resource body as either a dict or a 1-element list."""
@@ -1414,15 +1422,30 @@ def tf_adopt(scope: str, targets: tuple[str, ...], yes: bool,
             # gate that refuses those can never pass, which makes it useless
             # rather than strict — so they are allowed behind an explicit flag
             # and always printed.
+            #
+            # A CREATE of a recreate-safe unimportable type (terraform_data:
+            # provisioner runners like the XO boot-order setters) is INHERENT —
+            # it has no real object to import, so it can never be "already
+            # adopted". It is neither a wrong id nor a rotated secret, so it does
+            # not gate; it is left PENDING (the apply below targets only the
+            # imports, so adopt never executes it — a later real apply does).
             def _acts(c):
                 return set(c.get("change", {}).get("actions", [])) - {"no-op"}
-            unsafe = [c for c in all_changes if _acts(c) & {"delete", "create"}]
+            pending_safe = [c for c in all_changes
+                            if _acts(c) == {"create"} and c.get("type") in _RECREATE_SAFE]
+            safe_addrs = {c["address"] for c in pending_safe}
+            unsafe = [c for c in all_changes
+                      if c["address"] not in safe_addrs and _acts(c) & {"delete", "create"}]
             updates = [c for c in all_changes if _acts(c) == {"update"}]
-            changes = unsafe if allow_updates else all_changes
+            changes = list(unsafe) if allow_updates else (unsafe + updates)
             if updates and allow_updates:
                 console.print(f"[yellow]note:[/yellow] {len(updates)} in-place update(s) "
                               "in the plan — expected for this provider (timeouts, vm_id). "
                               "Review before the next apply.")
+            if pending_safe:
+                console.print(f"[yellow]note:[/yellow] {len(pending_safe)} unimportable "
+                              "resource(s) (e.g. boot-order runners) left PENDING — created by "
+                              "the next apply, not by adopt.")
             if changes:
                 console.print(f"[red]REFUSING {leaf}:[/red] the plan contains "
                               f"{len(changes)} resource change(s) beyond the imports:")
@@ -1432,6 +1455,19 @@ def tf_adopt(scope: str, targets: tuple[str, ...], yes: bool,
                               "an id is wrong or the config has drifted — resolve that first.")
                 overall = 1
                 continue
+            # Apply ONLY the imports. When the plan carries pending_safe creates,
+            # re-plan targeted to the adoptable addresses so those creates are
+            # NOT executed here; otherwise the saved full plan is imports-only.
+            if pending_safe:
+                targets = [f"-target={r['addr']}" for r in adoptable]
+                r = subprocess.run(
+                    ["tofu", "plan", "-input=false", "-out", str(plan), *targets],
+                    cwd=wd, capture_output=True, text=True)
+                if r.returncode != 0:
+                    console.print(f"[red]ERROR:[/red] targeted import plan failed:\n"
+                                  f"{(r.stderr or '')[-800:]}")
+                    overall = 1
+                    continue
             r = subprocess.run(["tofu", "apply", "-input=false", str(plan)],
                                cwd=wd, capture_output=True, text=True)
             if r.returncode != 0:
