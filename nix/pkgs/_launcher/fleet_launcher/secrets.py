@@ -19,6 +19,7 @@ import sys
 import tempfile
 
 import click
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -94,10 +95,46 @@ def _sops_decrypt_to_string(secrets_file: str) -> str:
     return result.stdout
 
 
+def _sops_create(sops: str, secrets_file: str, parts: list[str], value: str):
+    """Mint a new encrypted secrets file holding exactly one key.
+
+    `sops --set` edits in place and fails on a path that does not exist, so a
+    fleet that routes a tree to its own file (fleet.settings.sopsFiles) had no
+    way to create that file through the CLI — the first key had to be written
+    with a hand-rolled `sops -e` pipeline, which is exactly the bypass the
+    CLI exists to remove.
+
+    Encrypting needs only the recipients .sops.yaml names for this path, so
+    this half works even where `--set` could not: no private key is read.
+    """
+    os.makedirs(os.path.dirname(secrets_file) or ".", exist_ok=True)
+    tree: dict = {}
+    node = tree
+    for p in parts[:-1]:
+        node = node.setdefault(p, {})
+    node[parts[-1]] = value
+    # --filename-override makes sops pick the format and the creation_rule
+    # from the DESTINATION path rather than from /dev/stdin.
+    result = subprocess.run(
+        [sops, "-e", "--filename-override", secrets_file, "/dev/stdin"],
+        input=yaml.safe_dump(tree, default_flow_style=False),
+        capture_output=True, text=True, cwd=_find_repo_root(),
+    )
+    if result.returncode != 0:
+        console.print(f"[red]ERROR:[/red] sops encrypt failed: {result.stderr.strip()}")
+        sys.exit(1)
+    with open(secrets_file, "w") as fh:
+        fh.write(result.stdout)
+    console.print(f"[green]created[/green] {secrets_file} (encrypted)")
+
+
 def _sops_set(secrets_file: str, key_path: str, value: str):
     """Set a key in the secrets file using sops --set."""
     sops = _require_sops()
     _ensure_age_key()
+    if not os.path.exists(secrets_file):
+        _sops_create(sops, secrets_file, key_path.split("/"), value)
+        return
     # sops --set expects a Python-literal-ish expression where the value is
     # parsed as JSON, e.g. '["key1"]["key2"] "value"'. Hand-quoting via
     # f-string corrupts any value containing newlines, double quotes, or
@@ -121,7 +158,6 @@ def _sops_rm(secrets_file: str, key_path: str):
     sops = _require_sops()
     _ensure_age_key()
 
-    import yaml
     plaintext = _sops_decrypt_to_string(secrets_file)
     data = yaml.safe_load(plaintext)
 
@@ -194,7 +230,6 @@ def _lookup(secrets_file: str, key_path: str):
     not resolve. Returns the node as-is — callers decide whether a dict is
     acceptable; `get` rejects it, `replace` only cares that it exists.
     """
-    import yaml
     _ensure_age_key()
     data = yaml.safe_load(_sops_decrypt_to_string(secrets_file))
 
@@ -389,7 +424,6 @@ def keys():
 def keys_list(secrets_file: str | None):
     """List all secret key paths."""
     sf = secrets_file or _find_secrets_file()
-    import yaml
     _ensure_age_key()
     plaintext = _sops_decrypt_to_string(sf)
     data = yaml.safe_load(plaintext)
@@ -434,12 +468,17 @@ def keys_get(key_path: str, secrets_file: str | None, no_newline: bool):
 @keys.command("add")
 @click.argument("key_path")
 @click.argument("value")
-@click.option("--file", "secrets_file", default=None)
+@click.option("--file", "secrets_file", default=None,
+              help="Target file (default: the fleet's sopsSecretsFile). "
+                   "Created, encrypted per .sops.yaml, if it does not exist.")
 def keys_add(key_path: str, value: str, secrets_file: str | None):
     """Add or set a secret key.
 
     KEY_PATH is slash-separated (e.g., services/grafana/admin_password).
     VALUE is the plaintext secret value.
+
+    Writing into a file that does not exist yet creates it — that is how a
+    tree routed elsewhere by fleet.settings.sopsFiles gets its first key.
     """
     sf = secrets_file or _find_secrets_file()
     _sops_set(sf, key_path, value)
