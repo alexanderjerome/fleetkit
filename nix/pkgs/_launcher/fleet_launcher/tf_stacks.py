@@ -168,6 +168,11 @@ def _stage_json(root: Path, leaf_id: str) -> Path:
     if not out:
         console.print(f"[red]ERROR:[/red] nix build .#tf-{slug} produced no output")
         sys.exit(1)
+    # Unlink first: the source is a nix store path (mode 444) and any workdir
+    # rendered before the chmod below existed still holds a 444 destination.
+    # shutil.copy opens the destination for writing, so re-rendering into one
+    # of those dies with EACCES and wedges the leaf permanently.
+    dest.unlink(missing_ok=True)
     shutil.copy(out, dest)
     dest.chmod(0o644)
     try:
@@ -470,7 +475,7 @@ def _backend_of(workdir: Path) -> tuple[str, dict]:
     return kind, backend[kind] or {}
 
 
-def _state_identity(workdir: Path) -> dict | None:
+def _state_identity(workdir: Path) -> tuple[dict | None, str]:
     """Identity of the state in the CURRENTLY initialised backend.
 
     lineage is tofu's own "is this the same state file" marker; serial counts
@@ -478,19 +483,26 @@ def _state_identity(workdir: Path) -> dict | None:
     that matters after a migration: is what landed the same state, or a
     different (possibly empty) one wearing the same name.
 
-    None means the state could not be read at all — an unreachable backend or
-    a workdir that was never initialised. That is deliberately not treated as
-    "empty": an unreachable old backend looks identical to an empty one, and
-    migrating on that assumption is how a fleet loses its inventory.
+    Returns (identity, reason). A None identity means the state could not be
+    read at all — an unreachable backend or a workdir that was never
+    initialised. That is deliberately not treated as "empty": an unreachable
+    old backend looks identical to an empty one, and migrating on that
+    assumption is how a fleet loses its inventory.
+
+    `reason` carries tofu's own stderr. Reporting "could not read state" and
+    nothing else sends you looking at the backend when the actual cause is
+    usually a missing credential in the environment — the two are
+    indistinguishable from the message alone.
     """
     r = subprocess.run(["tofu", "state", "pull"], cwd=workdir,
                        capture_output=True, text=True, check=False)
     if r.returncode != 0 or not r.stdout.strip():
-        return None
+        err = " ".join((r.stderr or "").split())
+        return None, (err[:300] or f"`tofu state pull` exited {r.returncode} with no output")
     try:
         st = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return None
+        return None, "the backend returned something that is not valid state JSON"
     resources = st.get("resources") or []
     return {
         "lineage": st.get("lineage"),
@@ -498,7 +510,7 @@ def _state_identity(workdir: Path) -> dict | None:
         "resources": len(resources),
         "instances": sum(len(res.get("instances") or []) for res in resources),
         "raw": r.stdout,
-    }
+    }, ""
 
 
 def _fmt_backend(kind: str, cfg: dict) -> str:
@@ -557,9 +569,10 @@ def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) ->
                                   "`fleet deploy tf init` binds it to the new backend directly"))
             continue
         old_kind, old_cfg = _backend_of(wd)
-        before = _state_identity(wd)
+        before, why = _state_identity(wd)
         if before is None:
-            skipped.append((leaf, f"could not read state from the current backend ({old_kind or 'unknown'})"))
+            skipped.append((leaf, f"could not read state from the current backend "
+                                  f"({old_kind or 'unknown'}): {why}"))
             continue
         # Re-render against the current settings. The sidecar is dropped first
         # because a cache hit here would compare the old backend with itself
@@ -637,9 +650,10 @@ def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) ->
             failures.append(leaf)
             continue
 
-        after = _state_identity(wd)
+        after, why = _state_identity(wd)
         if after is None:
-            console.print(f"[red]FAIL[/red]     init succeeded but the new backend returns no state. "
+            console.print(f"[red]FAIL[/red]     init succeeded but the new backend returns no state "
+                          f"({why}). "
                           f"Do NOT apply. Restore with: fleet deploy tf state-push {leaf} {dump}")
             failures.append(leaf)
             continue
