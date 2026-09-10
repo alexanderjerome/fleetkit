@@ -37,8 +37,11 @@ in
   };
 
   config = mkIf cfg.enable {
-    # Builder needs Docker for container builds.
-    infra.integrations.docker.enable = true;
+    # Docker, for builders that also produce container images. mkDefault,
+    # not a hard set: a builder that only ever produces nix derivations
+    # (jeirslab's does) should be able to say so and drop the daemon plus
+    # its closure, without mkForce-ing its way out of the framework.
+    infra.integrations.docker.enable = lib.mkDefault true;
 
     nix.settings = {
       max-jobs = cfg.maxJobs;
