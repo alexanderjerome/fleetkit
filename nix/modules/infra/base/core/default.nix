@@ -26,6 +26,7 @@ in
 {
   imports = [
     ../platform
+    ./gc.nix
   ];
 
   # ── Locale ─────────────────────────────────────────────────────
@@ -165,31 +166,8 @@ in
   # ── Nix ────────────────────────────────────────────────────────
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-  # Per-host disks are tight (netgate at 24 GB, app-* at 2 GB), so
-  # generations accumulate across deploys and ENOSPC the rootfs
-  # mid-copy ("copying N paths..." → die). Two-tier defense:
-  #   1. Daily GC drops generations older than 7 days.
-  #   2. min-free / max-free trigger an emergency GC inside the
-  #      nix-daemon when free space dips below 1 GiB during a copy
-  #      or build, freeing until 5 GiB is available again.
-  # The second tier is what protects in-flight `colmena apply` from
-  # dying on tight hosts.
-  #
-  # INFRA-108: tightened weekly/14d → daily/7d. backend-v2 (16 G root,
-  # deployed multiple times/day) accumulated 5.8 GiB / ~800k inodes of old
-  # generations under the 14d window and tripped BOTH disk-warning and
-  # disk-critical (89% bytes, 98% inodes). The emergency min-free tier
-  # didn't help: it triggers only below 1 GiB free (we sat at 1.7 G) and
-  # does nothing for inode exhaustion. Daily/7d keeps high-churn hosts lean
-  # while still leaving a week of rollback.
-  nix.gc = {
-    automatic = true;
-    dates = "daily";
-    options = "--delete-older-than 7d";
-    randomizedDelaySec = "1h";
-  };
-  nix.settings.min-free = 1024 * 1024 * 1024;     # 1 GiB
-  nix.settings.max-free = 5 * 1024 * 1024 * 1024; # 5 GiB
+  # Store hygiene — GC policy, retention bounds, min-free/max-free — is
+  # in ./gc.nix, which owns infra.nix.gc.keepGenerations alongside it.
 
   # Overridable: adopted hosts keep the stateVersion they were born with
   # (changing it can migrate on-disk state formats).
