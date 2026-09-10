@@ -531,13 +531,41 @@ def _pin_config_to_initialised(workdir: Path) -> bool:
     return True
 
 
+def _resource_index(state: dict) -> dict[str, str]:
+    """Every resource instance in a state, as {address: canonical attributes}.
+
+    This is the inventory itself rather than a marker standing in for it, so
+    comparing two of these answers "did the same resources arrive, unchanged"
+    directly. Attributes are canonicalised with sorted keys so the comparison
+    survives a backend that reserialises the JSON on write.
+    """
+    index: dict[str, str] = {}
+    for res in state.get("resources") or []:
+        addr = ".".join(part for part in (
+            res.get("module"),
+            "data" if res.get("mode") == "data" else None,
+            res.get("type"),
+            res.get("name"),
+        ) if part)
+        for pos, inst in enumerate(res.get("instances") or []):
+            key = inst.get("index_key", pos)
+            # A deposed instance is a distinct object at the same address;
+            # collapsing it into the live one would hide a lost leftover.
+            suffix = f" deposed={inst['deposed']}" if inst.get("deposed") else ""
+            index[f"{addr}[{key}]{suffix}"] = json.dumps(inst.get("attributes"),
+                                                         sort_keys=True)
+    return index
+
+
 def _state_identity(workdir: Path) -> tuple[dict | None, str]:
     """Identity of the state in the CURRENTLY initialised backend.
 
-    lineage is tofu's own "is this the same state file" marker; serial counts
-    writes. Together with the instance count they answer the only question
-    that matters after a migration: is what landed the same state, or a
-    different (possibly empty) one wearing the same name.
+    The `index` — every resource instance address mapped to its attributes —
+    is what actually answers the question a migration has to answer: is what
+    landed the same inventory, or a different (possibly empty) one wearing
+    the same name. lineage and serial are recorded alongside it for reporting,
+    but they are backend bookkeeping, not evidence: see the migrate-backend
+    verification for why neither survives a legitimate cross-backend move.
 
     Returns (identity, reason). A None identity means the state could not be
     read at all — an unreachable backend or a workdir that was never
@@ -560,11 +588,13 @@ def _state_identity(workdir: Path) -> tuple[dict | None, str]:
     except json.JSONDecodeError:
         return None, "the backend returned something that is not valid state JSON"
     resources = st.get("resources") or []
+    index = _resource_index(st)
     return {
         "lineage": st.get("lineage"),
         "serial": st.get("serial"),
         "resources": len(resources),
         "instances": sum(len(res.get("instances") or []) for res in resources),
+        "index": index,
         "raw": r.stdout,
     }, ""
 
@@ -595,13 +625,18 @@ def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) ->
     and BEFORE the next plan or apply. For each leaf it:
 
     \b
-      1. reads lineage, serial and instance count from the old backend
+      1. reads the full resource inventory from the old backend
       2. dumps that state to --backup-dir (refusing to clobber an existing dump)
       3. re-renders config.tf.json so the new backend block is in place
       4. runs `tofu init -migrate-state`, copying the state across
-      5. re-reads the identity from the new backend and REFUSES to call it a
-         success unless lineage matches, serial did not go backwards, and the
-         instance count is unchanged
+      5. re-reads the inventory from the new backend and REFUSES to call it a
+         success unless every resource instance arrived with byte-identical
+         attributes — nothing missing, nothing extra, nothing altered
+
+    lineage and serial are reported but deliberately not enforced: a
+    destination backend mints its own state on first write (pg re-stamps
+    lineage and resets serial to 1), so requiring them to survive would fail
+    every genuine cross-backend migration.
 
     A leaf whose old state cannot be read is skipped, not migrated: an
     unreachable backend and an empty one are indistinguishable from here, and
@@ -728,24 +763,41 @@ def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) ->
             failures.append(leaf)
             continue
 
-        problems = []
-        if after["lineage"] != before["lineage"]:
-            problems.append(f"lineage {before['lineage']} → {after['lineage']} "
-                            f"(a DIFFERENT state, not a copy)")
-        if (after["serial"] or 0) < (before["serial"] or 0):
-            problems.append(f"serial went backwards {before['serial']} → {after['serial']}")
-        if after["instances"] != before["instances"]:
-            problems.append(f"instances {before['instances']} → {after['instances']}")
-        if problems:
+        # Compare the inventory, not tofu's bookkeeping. A destination backend
+        # mints its own state on first write: pg re-stamps `lineage` and resets
+        # `serial` to 1, and both are correct behaviour for a real migration.
+        # Failing on either reports a clean move as a disaster — and, worse,
+        # trains the operator to ignore the one check that would catch a real
+        # one. What must not change is which resources are tracked and what
+        # they say, so that is what is checked.
+        old_index, new_index = before["index"], after["index"]
+        missing = sorted(set(old_index) - set(new_index))
+        extra = sorted(set(new_index) - set(old_index))
+        altered = sorted(a for a in set(old_index) & set(new_index)
+                         if old_index[a] != new_index[a])
+        if missing or extra or altered:
             console.print("[red]FAIL[/red]     migrated state does not match the original:")
-            for pr in problems:
-                console.print(f"         - {pr}")
-            console.print(f"         Do NOT apply. The original is at {dump}.")
+            for addr in missing[:10]:
+                console.print(f"         - missing from the new backend: {addr}")
+            for addr in extra[:10]:
+                console.print(f"         - present only in the new backend: {addr}")
+            for addr in altered[:10]:
+                console.print(f"         - attributes changed: {addr}")
+            dropped = len(missing) + len(extra) + len(altered) - min(len(missing), 10) \
+                - min(len(extra), 10) - min(len(altered), 10)
+            if dropped > 0:
+                console.print(f"         - … and {dropped} more")
+            console.print(f"         Do NOT apply. Restore with: "
+                          f"fleet deploy tf state-push {leaf} {dump}")
             failures.append(leaf)
             continue
 
-        console.print(f"[green]OK[/green]       {after['instances']} instance(s), "
-                      f"lineage intact, serial {after['serial']}")
+        restamped = ""
+        if after["lineage"] != before["lineage"]:
+            restamped = (f", new lineage {after['lineage'][:8]} "
+                         f"(expected: {p['new'][0]} minted its own)")
+        console.print(f"[green]OK[/green]       {after['instances']} instance(s) verified "
+                      f"identical, serial {before['serial']} → {after['serial']}{restamped}")
 
     done = len(plans) - len(failures)
     console.print(f"[bold]migrated {done}/{len(plans)}[/bold]"
