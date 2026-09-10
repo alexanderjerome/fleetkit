@@ -51,6 +51,7 @@
 
     # ── infra.build — build/cache infrastructure ──
     ./build/builder # Nix remote builder + harmonia cache (infra.build.builder)
+    ./build/remote # client half — offload builds to them (infra.build.remote)
     ./build/attic # attic binary cache (infra.build.attic)
     ./build/hydra.nix
     ./build/lxc-template-factory.nix # infra.build.lxcTemplateFactory
