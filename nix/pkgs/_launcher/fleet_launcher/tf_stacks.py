@@ -475,6 +475,62 @@ def _backend_of(workdir: Path) -> tuple[str, dict]:
     return kind, backend[kind] or {}
 
 
+def _strip_nulls(value):
+    """Drop null-valued keys, recursively. Tofu records unset backend fields
+    (`endpoints.dynamodb`, `sts`, …) as explicit nulls; writing those back
+    into a backend block is not the same document it started with."""
+    if isinstance(value, dict):
+        return {k: _strip_nulls(v) for k, v in value.items() if v is not None}
+    return value
+
+
+def _initialised_backend(workdir: Path) -> tuple[str, dict]:
+    """The backend this workdir is actually BOUND to, per `.terraform/`.
+
+    config.tf.json says where the fleet now wants state to live; this says
+    where it currently lives. The two diverge the moment anything re-renders
+    the config — including a previous `migrate-backend --dry-run` — and when
+    they do, this is the only remaining record of the old backend.
+    """
+    try:
+        st = json.loads((workdir / ".terraform" / "terraform.tfstate").read_text())
+    except (OSError, json.JSONDecodeError):
+        return "", {}
+    backend = st.get("backend") or {}
+    return backend.get("type") or "", _strip_nulls(backend.get("config") or {})
+
+
+def _pin_config_to_initialised(workdir: Path) -> bool:
+    """Put config.tf.json's backend block back to the initialised one.
+
+    `tofu state pull` refuses outright when the declared backend differs from
+    the initialised one — "Backend type changed from s3 to pg" — so a workdir
+    whose config was already re-rendered cannot be read AT ALL until this is
+    undone. Without it a single --dry-run permanently strands the state it
+    was meant to describe. Returns True if anything changed.
+    """
+    kind, cfg = _initialised_backend(workdir)
+    if not kind:
+        return False
+    path = workdir / "config.tf.json"
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    tf = doc.setdefault("terraform", {})
+    if tf.get("backend") == {kind: cfg}:
+        return False
+    tf["backend"] = {kind: cfg}
+    path.unlink(missing_ok=True)          # staged copies are mode 444
+    path.write_text(json.dumps(doc, indent=2))
+    path.chmod(0o644)
+    # config.tf.json is now something `nix build` did not produce, so the
+    # fingerprint sidecar no longer describes it. Leaving it would let the
+    # next _stage_json take a cache hit and keep this hand-written backend.
+    (workdir / ".cache.json").unlink(missing_ok=True)
+    return True
+
+
 def _state_identity(workdir: Path) -> tuple[dict | None, str]:
     """Identity of the state in the CURRENTLY initialised backend.
 
@@ -568,7 +624,15 @@ def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) ->
             skipped.append((leaf, "never initialised — no state to move; "
                                   "`fleet deploy tf init` binds it to the new backend directly"))
             continue
-        old_kind, old_cfg = _backend_of(wd)
+        # Trust `.terraform`, not config.tf.json: an earlier run of this very
+        # command (or any verb that re-renders) may already have replaced the
+        # declared backend with the target one, and reading THAT would report
+        # the migration as already done while the state sits in the old
+        # backend, unreferenced.
+        _pin_config_to_initialised(wd)
+        old_kind, old_cfg = _initialised_backend(wd)
+        if not old_kind:
+            old_kind, old_cfg = _backend_of(wd)
         before, why = _state_identity(wd)
         if before is None:
             skipped.append((leaf, f"could not read state from the current backend "
@@ -580,6 +644,12 @@ def tf_migrate_backend(scope: str, yes: bool, dry_run: bool, backup_dir: str) ->
         (wd / ".cache.json").unlink(missing_ok=True)
         _stage_json(root, leaf)
         new_kind, new_cfg = _backend_of(wd)
+        # A dry run must leave the workdir exactly as it found it. Re-rendering
+        # is how we learn the target backend, so undo it here rather than skip
+        # it — otherwise `--dry-run`, the cautious option, is the one that
+        # strands the state.
+        if dry_run:
+            _pin_config_to_initialised(wd)
         if (new_kind, new_cfg) == (old_kind, old_cfg):
             skipped.append((leaf, f"already on {_fmt_backend(old_kind, old_cfg)}"))
             continue
