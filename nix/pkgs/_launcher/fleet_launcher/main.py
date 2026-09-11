@@ -334,9 +334,34 @@ def _setup_env() -> None:
                 # over username/password where both are present.
                 "api_token": "PROXMOX_VE_API_TOKEN",
             }
-            for key, env_var in mapping.items():
-                if key in pve:
-                    _setenv_if_blank(env_var, pve[key])
+
+            # Two shapes live under this tree. A single-instance fleet files
+            # the credentials flat (integrations.proxmox.api_token); a fleet
+            # using named provider instances files them per instance
+            # (integrations.proxmox.main.api_token), matching the
+            # `fleet.providers.proxmox.<inst>` schema and the sops paths its
+            # provider block already declares.
+            #
+            # Only the flat shape was read, so on a per-instance fleet this
+            # loop matched nothing, set nothing, and `except: pass` swallowed
+            # it. Terranix still worked (it resolves its own sops paths at
+            # apply time), which is what made the gap invisible — but every
+            # `fleet pve` verb reported "PROXMOX_VE_ENDPOINT not set" with a
+            # fully populated secrets file sitting right there.
+            #
+            # Flat wins where both exist; otherwise take the first instance in
+            # sorted order, so the choice is at least deterministic. A fleet
+            # with several PVE clusters needs a real --instance selector, not
+            # a guess — but a guess beats today's silent nothing.
+            candidates = [pve] if isinstance(pve, dict) else []
+            if isinstance(pve, dict) and not (set(mapping) & set(pve)):
+                candidates = [pve[k] for k in sorted(pve)
+                              if isinstance(pve[k], dict)]
+
+            for source in candidates:
+                for key, env_var in mapping.items():
+                    if key in source:
+                        _setenv_if_blank(env_var, source[key])
         _setenv_if_blank("PROXMOX_VE_INSECURE", "true")
     except Exception:
         pass

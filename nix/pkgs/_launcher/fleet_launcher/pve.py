@@ -352,3 +352,103 @@ def status():
 
     console.print(table)
     console.print(f"\n[dim]{len(cts)} containers total[/dim]")
+
+
+@pve.command("storage")
+@click.option("--node", default=None,
+              help="Limit to one cluster node (default: every node).")
+def storage(node: str | None):
+    """Show datastore capacity, and what guests have been PROMISED.
+
+    Thin pools are the fleet's most consequential silent failure: LVM-thin
+    and ZFS both hand out volumes lazily, so a `tofu apply` that overcommits
+    the pool succeeds, the guest boots, and nothing complains until the pool
+    actually fills — at which point EVERY guest sharing it goes read-only at
+    once (INFRA-164). `used` alone cannot warn you about that; the number
+    that can is the sum of what the guests are entitled to grow into.
+
+    So this reports both: real allocation against capacity, and provisioned
+    against capacity. The second exceeding 100% is not itself a fault — it
+    is the point of thin provisioning — but it is the number to know before
+    adding another large disk to a pool.
+    """
+    from .pve_api import get_client
+
+    console.print("Querying PVE API...")
+    promised: dict[tuple[str, str], int] = {}
+    try:
+        api = get_client()
+        nodes = [node] if node else [n["node"] for n in api.nodes.get()]
+        stores = []
+        for n in nodes:
+            for s in api.nodes(n).storage.get():
+                if s.get("total"):
+                    stores.append((n, s))
+    except Exception as exc:  # noqa: BLE001 — surface the API's own message
+        console.print(f"[red]ERROR:[/red] {exc}")
+        sys.exit(1)
+
+    # /cluster/resources carries guest sizes but not WHICH datastore each
+    # disk is on, and that mapping is the whole question here — so the
+    # promise total needs the per-guest config. Cheap enough at fleet scale,
+    # and skipped for any guest whose config will not read.
+    for n in nodes:
+        for kind in ("lxc", "qemu"):
+            try:
+                guests = getattr(api.nodes(n), kind).get()
+            except Exception:  # noqa: BLE001 — a node may be down
+                continue
+            for g in guests:
+                try:
+                    cfg = getattr(api.nodes(n), kind)(g["vmid"]).config.get()
+                except Exception:  # noqa: BLE001
+                    continue
+                for key, val in cfg.items():
+                    if not isinstance(val, str) or ":" not in val:
+                        continue
+                    if not (key.startswith(("rootfs", "scsi", "virtio",
+                                            "sata", "ide", "mp"))):
+                        continue
+                    ds = val.split(":", 1)[0]
+                    for part in val.split(","):
+                        if part.startswith("size="):
+                            raw = part[5:]
+                            mult = {"T": 2**40, "G": 2**30,
+                                    "M": 2**20, "K": 2**10}.get(raw[-1:], 1)
+                            try:
+                                num = float(raw[:-1] if mult > 1 else raw)
+                            except ValueError:
+                                continue
+                            promised[(n, ds)] = promised.get((n, ds), 0) + int(num * mult)
+
+    from rich.table import Table
+    table = Table(title="Datastores", show_header=True, header_style="bold cyan")
+    table.add_column("Node", style="dim")
+    table.add_column("Datastore", style="green")
+    table.add_column("Type")
+    table.add_column("Used", justify="right")
+    table.add_column("Total", justify="right")
+    table.add_column("Used %", justify="right")
+    table.add_column("Promised", justify="right")
+    table.add_column("Promised %", justify="right")
+
+    gib = float(2**30)
+    for n, s in sorted(stores, key=lambda x: (x[0], x[1]["storage"])):
+        total = int(s["total"])
+        used = int(s.get("used", 0))
+        pct = used * 100.0 / total
+        prom = promised.get((n, s["storage"]), 0)
+        prom_pct = prom * 100.0 / total
+        style = "red" if pct >= 85 else "yellow" if pct >= 70 else "green"
+        # Overcommit is expected on a thin pool; flag it only once the
+        # promises are far enough ahead that a fill-up is plausible.
+        p_style = "red" if prom_pct >= 200 else "yellow" if prom_pct >= 100 else "green"
+        table.add_row(
+            n, s["storage"], s.get("type", ""),
+            f"{used / gib:.1f}G", f"{total / gib:.1f}G",
+            f"[{style}]{pct:.0f}%[/{style}]",
+            f"{prom / gib:.1f}G" if prom else "-",
+            f"[{p_style}]{prom_pct:.0f}%[/{p_style}]" if prom else "-",
+        )
+
+    console.print(table)

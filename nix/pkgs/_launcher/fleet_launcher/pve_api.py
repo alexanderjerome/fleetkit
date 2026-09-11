@@ -8,6 +8,7 @@ the terranix bw_proxmox provider consumes:
   PROXMOX_VE_ENDPOINT  — https://192.0.2.2:8006
   PROXMOX_VE_USERNAME  — root@pam
   PROXMOX_VE_PASSWORD  — password
+  PROXMOX_VE_API_TOKEN — root@pam!fleet=<uuid> (preferred over password)
   PROXMOX_VE_INSECURE  — true (skip TLS verify)
 """
 from __future__ import annotations
@@ -38,18 +39,46 @@ def get_client() -> ProxmoxAPI:
     endpoint = os.environ.get("PROXMOX_VE_ENDPOINT", "")
     username = os.environ.get("PROXMOX_VE_USERNAME", "root@pam")
     password = os.environ.get("PROXMOX_VE_PASSWORD", "")
+    api_token = os.environ.get("PROXMOX_VE_API_TOKEN", "")
     insecure = os.environ.get("PROXMOX_VE_INSECURE", "false").lower() in ("true", "1", "yes")
 
     if not endpoint:
         console.print("[red]ERROR:[/red] PROXMOX_VE_ENDPOINT not set (source .env)")
         sys.exit(1)
-    if not password:
-        console.print("[red]ERROR:[/red] PROXMOX_VE_PASSWORD not set (source .env)")
+    if not password and not api_token:
+        console.print(
+            "[red]ERROR:[/red] neither PROXMOX_VE_API_TOKEN nor PROXMOX_VE_PASSWORD "
+            "is set — no way to authenticate to the PVE API")
         sys.exit(1)
 
     parsed = urlparse(endpoint)
     host = parsed.hostname or endpoint
     port = parsed.port or 8006
+
+    # Token auth, preferred. bpg/proxmox (and therefore the fleet's SOPS
+    # store) carries the token as one `user@realm!tokenid=uuid` string;
+    # proxmoxer wants it split three ways. A fleet whose only PVE credential
+    # is a token used to fall through to the password branch and exit 1 on
+    # "PROXMOX_VE_PASSWORD not set", which made every `fleet pve` verb
+    # unusable there despite the credential being present and correct.
+    if api_token:
+        ident, _, token_value = api_token.partition("=")
+        token_user, _, token_name = ident.partition("!")
+        if not (token_value and token_name):
+            console.print(
+                "[red]ERROR:[/red] PROXMOX_VE_API_TOKEN is not in "
+                "`user@realm!tokenid=uuid` form")
+            sys.exit(1)
+        _client = ProxmoxAPI(
+            host,
+            port=port,
+            user=token_user or username,
+            token_name=token_name,
+            token_value=token_value,
+            verify_ssl=not insecure,
+            timeout=30,
+        )
+        return _client
 
     _client = ProxmoxAPI(
         host,
