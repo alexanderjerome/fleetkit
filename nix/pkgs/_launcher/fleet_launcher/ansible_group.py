@@ -85,6 +85,23 @@ def framework_modules_dir() -> Path | None:
     return None
 
 
+def framework_images_dir() -> Path | None:
+    """Locate fleetkit's nix/images/ tree (bootstrap image definitions).
+
+    Order: $FLEET_IMAGES_DIR (set by the Nix wrapper to the store copy),
+    then the tree relative to this module (editable/devshell install:
+    nix/pkgs/_launcher/fleet_launcher/ → repo root → nix/images/).
+    """
+    if env := os.environ.get("FLEET_IMAGES_DIR"):
+        p = Path(env)
+        if p.is_dir():
+            return p
+    candidate = Path(__file__).resolve().parents[4] / "nix" / "images"
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
 def module_playbooks(root: Path | None = None) -> dict[str, Path]:
     """Discover module-adjacent playbooks — consumer AND framework modules.
 

@@ -1,6 +1,7 @@
 """fleet pve — Proxmox VE host management commands."""
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -8,10 +9,25 @@ from pathlib import Path
 import click
 from rich.console import Console
 
+from . import config as cfg
 from ._util import find_project_root
 from .pve_api import get_host
 
 console = Console()
+
+
+def _nix_str_list(values: list[str]) -> str:
+    """Render a Python list of strings as a Nix list literal.
+
+    For `nix-build --arg`, which takes an expression rather than a string.
+    `${` is escaped because Nix would otherwise read it as antiquotation —
+    no cache URL or signing key contains one, but a silent interpolation is
+    a worse failure than a redundant backslash.
+    """
+    def one(v: str) -> str:
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"').replace("${", "\\${") + '"'
+
+    return "[ " + " ".join(one(v) for v in values) + " ]"
 
 
 def _get_pve_config(host_override: str | None = None) -> tuple[str, str]:
@@ -106,9 +122,62 @@ def build_template(host: str | None, image_type: str, builder_nix: str | None, t
     """
     pve_host, pve_user = _get_pve_config(host)
 
-    # Defaults based on image type
+    # Ship the canonical image definition unless the operator pointed at their
+    # own with --builder-nix. It used to have to be hand-copied to
+    # /root/builder/ on the hypervisor, where it drifted from the repo
+    # silently: the build kept succeeding against the stale copy, so a
+    # template fix could land in git and never reach a single container. The
+    # shipped file goes to its own path so an operator's file is left alone —
+    # it just stops being what gets built.
+    build_args: list[str] = []
     if builder_nix is None:
-        builder_nix = "/root/builder/proxmox-nixos-lxc-image.nix" if image_type == "lxc" else "/root/builder/proxmox-nixos-vm-image.nix"
+        from .ansible_group import framework_images_dir
+
+        images = framework_images_dir()
+        if images is None:
+            console.print("[red]ERROR:[/red] cannot locate fleetkit's nix/images/ tree "
+                          "(set FLEET_IMAGES_DIR or pass --builder-nix)")
+            sys.exit(1)
+        src = images / "by-platform" / "proxmox.nix"
+        if not src.is_file():
+            console.print(f"[red]ERROR:[/red] {src} not found")
+            sys.exit(1)
+
+        builder_nix = "/root/builder/fleetkit-proxmox.nix"
+        console.print(f"Shipping [bold]{src}[/bold] → {pve_host}:{builder_nix}")
+        subprocess.run(
+            _ssh_cmd(pve_host, pve_user) + ["mkdir -p /root/builder"],
+            check=True, text=True,
+        )
+        scp = subprocess.run(
+            ["scp", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
+             "-o", "BatchMode=yes", str(src), f"{pve_user}@{pve_host}:{builder_nix}"],
+            text=True,
+        )
+        if scp.returncode != 0:
+            console.print("[red]ERROR:[/red] failed to ship the image definition")
+            sys.exit(1)
+
+        # The image's parameters come from the fleet manifest, not from a
+        # value edited into the copy on the hypervisor. sshPubKey is what
+        # Colmena's first push authenticates with; the cache pair is why a
+        # fresh container substitutes its first closure instead of building
+        # it on 2 vCPUs (see the nix.settings note in the image).
+        build_args += ["--argstr", "sshPubKey", cfg.require(
+            "network.sysadmin_ssh_key",
+            "set fleet.network.sysadmin_ssh_key and rebuild the catalog",
+        )]
+        build_args += [
+            "--arg", "substituters", _nix_str_list(cfg.get("cache.substituters", []) or []),
+            "--arg", "trustedPublicKeys", _nix_str_list(cfg.get("cache.trusted_public_keys", []) or []),
+            "--arg", "type", f'"{image_type}"',
+        ]
+    elif image_type == "vm":
+        # An operator's own file is only assumed to take `type`, and only
+        # where the old default filenames made that necessary.
+        build_args += ["--arg", "type", '"vm"']
+
+    # Defaults based on image type
     if template_name is None:
         template_name = "nixos-lxc-template-x86_64.tar.xz" if image_type == "lxc" else "nixos-vm-image-x86_64.vma.zst"
 
@@ -120,6 +189,7 @@ def build_template(host: str | None, image_type: str, builder_nix: str | None, t
 
     # Build the script to run remotely
     storage_arg = f'"{storage}"' if storage else '""'
+    nix_build_args = " ".join(shlex.quote(a) for a in build_args)
     remote_script = f"""
 set -euo pipefail
 
@@ -134,12 +204,11 @@ fi
 
 if [ ! -f "{builder_nix}" ]; then
     echo "ERROR: {builder_nix} not found on this host" >&2
-    echo "Copy the builder file from the repo: nix/images/by-platform/proxmox.nix" >&2
     exit 1
 fi
 
 echo "==> Building NixOS {image_type.upper()} image..."
-STORE_PATH=$(nix-build "{builder_nix}" --no-out-link {f'--arg type \'"{image_type}"\'' if image_type == "vm" else ""})
+STORE_PATH=$(nix-build "{builder_nix}" --no-out-link {nix_build_args})
 echo "==> Store path: $STORE_PATH"
 
 IMAGE=$(find "$STORE_PATH" -maxdepth 2 -name '{file_ext}' | head -n 1)

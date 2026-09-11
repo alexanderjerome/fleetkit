@@ -18,6 +18,13 @@
   # infra/build/attic/attic-rebootstrap.yml) resolve from the
   # installed package too.
 , modulesTree ? ../../modules
+  # The framework nix/images/ tree, baked in as $FLEET_IMAGES_DIR so
+  # `fleet pve build-template` can SHIP the canonical image definition to
+  # the hypervisor instead of requiring it be hand-copied there. A copy
+  # sitting at /root/builder/ on a PVE node drifts silently from the repo,
+  # and nothing reports the drift — the build just keeps succeeding against
+  # a stale file.
+, imagesTree ? ../../images
 }:
 
 python3.pkgs.buildPythonApplication {
@@ -51,6 +58,7 @@ python3.pkgs.buildPythonApplication {
     "--prefix PATH : ${lib.makeBinPath [ sops opentofu age ]}"
     "--set-default FLEET_ANSIBLE_DIR ${ansibleTree}"
     "--set-default FLEET_MODULES_DIR ${modulesTree}"
+    "--set-default FLEET_IMAGES_DIR ${imagesTree}"
   ];
 
   pythonImportsCheck = [ "fleet_launcher" ];

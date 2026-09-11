@@ -285,6 +285,19 @@
               insecure = p.insecure;
             }) (fleetEval.providers.proxmox or { });
             mcp.grafana_token_sops_path = fleetEval.settings.mcp.grafanaTokenSopsPath;
+            # In-fleet binary caches and the operator key, for
+            # `fleet pve build-template`. None of the three is a secret — a
+            # cache URL is a LAN address, a trusted-public-key is public by
+            # construction, and an SSH PUBLIC key is public by name. Same
+            # argument as providers.proxmox above: the template build needs
+            # facts the fleet already declares, and without them here the
+            # operator hand-edits the image file on the hypervisor, where it
+            # drifts from the repo with nothing reporting the drift.
+            cache = {
+              substituters = fleetEval.settings.cache.substituters;
+              trusted_public_keys = fleetEval.settings.cache.trustedPublicKeys;
+            };
+            network.sysadmin_ssh_key = fleetEval.network.sysadmin_ssh_key;
           });
 
           # fleet.settings as JSON — read by eval-free CLI features that
