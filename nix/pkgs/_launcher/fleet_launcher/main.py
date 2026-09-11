@@ -318,6 +318,34 @@ def _setup_env() -> None:
     except Exception:
         pass
 
+    # Proxmox provider ENDPOINT from the manifest. Not a credential:
+    # `fleet.providers.proxmox.<inst>.endpoint` is a LAN URL the fleet
+    # already declares, so it rides in the catalog rather than SOPS. It has
+    # to be read before the credential block below, whose blanket
+    # `PROXMOX_VE_INSECURE=true` fallback would otherwise win over a
+    # manifest that says otherwise.
+    #
+    # Without this, a fleet whose PVE credential is an api_token files only
+    # that token under integrations.proxmox — and every `fleet pve` verb
+    # died on "PROXMOX_VE_ENDPOINT not set" with the endpoint sitting in
+    # the manifest two directories away.
+    try:
+        from .config import get as _cfg_get
+        instances = _cfg_get("providers.proxmox") or {}
+        # First instance in sorted order, matching the credential loop below
+        # so the endpoint and the token cannot come from different clusters.
+        for _name in sorted(instances):
+            inst = instances[_name] or {}
+            if inst.get("endpoint"):
+                _setenv_if_blank("PROXMOX_VE_ENDPOINT", inst["endpoint"])
+                if inst.get("insecure") is not None:
+                    _setenv_if_blank(
+                        "PROXMOX_VE_INSECURE",
+                        "true" if inst["insecure"] else "false")
+                break
+    except Exception:
+        pass
+
     # Proxmox provider credentials for terranix.
     try:
         result = subprocess.run(

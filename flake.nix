@@ -271,6 +271,19 @@
             cli.extensions_dir = fleetEval.settings.cli.extensionsDir;
             pki.acme_dns_api_base = fleetEval.settings.pki.acmeDnsApiBase;
             pve.install = fleetEval.settings.pveInstall;
+            # Provider ENDPOINTS — not credentials. A PVE endpoint is a LAN
+            # URL declared in fleet.providers, not a secret, and it is the
+            # one thing `fleet pve` needs that the SOPS tree does not carry:
+            # a fleet whose credential is an api_token files only that token
+            # under integrations.proxmox, so every `pve` verb died on
+            # "PROXMOX_VE_ENDPOINT not set" with the endpoint sitting in the
+            # manifest two directories away. Credentials still come from
+            # SOPS; this only saves the operator from re-typing a fact the
+            # fleet already declares.
+            providers.proxmox = nixpkgs.lib.mapAttrs (_: p: {
+              endpoint = p.endpoint;
+              insecure = p.insecure;
+            }) (fleetEval.providers.proxmox or { });
             mcp.grafana_token_sops_path = fleetEval.settings.mcp.grafanaTokenSopsPath;
           });
 
