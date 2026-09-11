@@ -99,9 +99,15 @@ def remote(host_name: str, command: tuple[str, ...], use_pct: bool, user: str) -
 
         console.print(f"[dim]pct exec {vmid} on {pve_host} ({host_name}):[/dim] {cmd_str}")
         ensure_master(pve_host, user)
+        # pct exec attaches with a bare PATH — it does not read the guest's
+        # login environment. On a NixOS guest that means even `systemctl` and
+        # `df` are "command not found", which reads like a broken container
+        # rather than a missing PATH. Prepend the system profile; on a
+        # non-NixOS guest the directory simply is not there.
+        inner = f"export PATH=/run/current-system/sw/bin:$PATH; {cmd_str}"
         result = run_on_host(
             pve_host,
-            f"pct exec {vmid} -- /bin/sh -c '{cmd_str.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'",
+            f"pct exec {vmid} -- /bin/sh -c '{inner.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'",
             user=user, timeout=120,
         )
     else:
