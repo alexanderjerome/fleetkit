@@ -312,6 +312,7 @@ let
     if pkgs != null
     then "${pkgs.callPackage ../../images/lxc-template {
       sshPubKey = config.fleet.network.sysadmin_ssh_key;
+      inherit (config.fleet.settings.cache) substituters trustedPublicKeys;
     }}/nixos-lxc-template.tar.xz"
     else null;
 

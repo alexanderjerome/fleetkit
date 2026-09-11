@@ -18,6 +18,12 @@
   # Colmena's first push can reach it — fleets pass
   # config.fleet.network.sysadmin_ssh_key.
 , sshPubKey ? throw "images/by-platform/proxmox.nix: pass sshPubKey (e.g. config.fleet.network.sysadmin_ssh_key)"
+  # In-fleet binary caches baked into the image, from
+  # fleet.settings.cache.{substituters,trustedPublicKeys}. See the nix.settings
+  # note in sharedConfig for why these belong in the TEMPLATE and not only in
+  # the module that a deploy installs.
+, substituters ? []
+, trustedPublicKeys ? []
 }:
 
 let
@@ -55,6 +61,31 @@ let
     };
 
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+    # dbus-broker from the first boot. NixOS's `switchInhibitors` pre-switch
+    # check refuses a live activation that changes the dbus implementation,
+    # so a template shipping classic dbus makes EVERY fresh container's first
+    # deploy fail with `Pre-switch check 'switchInhibitors' failed` until it
+    # is retried with --reboot. The fleet's own modules set broker anyway;
+    # baking it in means the first switch is not the one that changes it.
+    services.dbus.implementation = "broker";
+
+    # The fleet's binary caches, trusted from the first boot.
+    #
+    # Same reasoning as boot.initrd.availableKernelModules in vmConfig below:
+    # the module that configures these only applies AFTER a successful deploy,
+    # which is too late for the deploy that installs it. A fresh container
+    # therefore builds its own closure from source — CT 120 spent 21 minutes
+    # linking argon2 on 2 vCPUs while the fleet's 8-core builder sat idle,
+    # because nothing had yet told it the builder existed. With the cache in
+    # the template, that first buildOnTarget deploy substitutes instead.
+    #
+    # Empty lists leave nix's defaults untouched, so a fleet with no in-fleet
+    # cache builds an unchanged image.
+    nix.settings = {
+      extra-substituters = substituters;
+      extra-trusted-public-keys = trustedPublicKeys;
+    };
 
     system.stateVersion = "25.11";
   };

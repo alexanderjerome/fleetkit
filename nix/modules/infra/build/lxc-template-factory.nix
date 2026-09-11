@@ -30,6 +30,7 @@ let
   # versioned wrapper gives the tarball a stable in-store filename.
   template = pkgs.callPackage ../../../images/lxc-template {
     sshPubKey = config.fleet.network.sysadmin_ssh_key;
+    inherit (config.fleet.settings.cache) substituters trustedPublicKeys;
   };
   version = config.system.nixos.version;
 

@@ -2,6 +2,12 @@
   # Operator SSH public key baked into the template's root account —
   # fleets pass config.fleet.network.sysadmin_ssh_key.
 , sshPubKey ? throw "images/lxc-template: pass sshPubKey (e.g. config.fleet.network.sysadmin_ssh_key)"
+  # In-fleet binary caches baked into the template — fleets pass
+  # config.fleet.settings.cache.{substituters,trustedPublicKeys}. See the
+  # nix.settings note in by-platform/proxmox.nix for why these have to be in
+  # the IMAGE and not only in the module that a deploy installs.
+, substituters ? []
+, trustedPublicKeys ? []
 }:
 
 # Wraps `nix/images/by-platform/proxmox.nix` (type=lxc) so the resulting
@@ -16,7 +22,7 @@
 
 let
   imageOutput = import ../../images/by-platform/proxmox.nix {
-    inherit pkgs sshPubKey;
+    inherit pkgs sshPubKey substituters trustedPublicKeys;
     type = "lxc";
   };
 in
