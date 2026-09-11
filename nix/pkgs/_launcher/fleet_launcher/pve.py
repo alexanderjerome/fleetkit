@@ -304,15 +304,34 @@ def _version_tuple(text: str) -> tuple[int, ...]:
 
 
 @pve.command("status")
-def status():
-    """Show Proxmox host status and container overview (via REST API)."""
+@click.option("--node", default=None,
+              help="Limit to one cluster node (default: every node).")
+def status(node: str | None):
+    """Show Proxmox host status and container overview (via REST API).
+
+    Enumerates every node unless --node narrows it. This used to call
+    list_containers() bare, and that helper defaults to node="pve" — the
+    name the fleet's single PVE host carried before it became a cluster.
+    On a multi-node estate "pve" is not a node at all, so the verb died
+    with `hostname lookup 'pve' failed` and could not show a container
+    even when pointed straight at one.
+    """
     from .pve_api import get_client, list_containers
 
     console.print("Querying PVE API...")
 
     try:
         api = get_client()
-        cts = list_containers(api)
+        nodes = [node] if node else [n["node"] for n in api.nodes.get()]
+        cts = []
+        for n in nodes:
+            # A member can be down while the cluster itself answers; one
+            # unreachable node should not blank the whole table.
+            try:
+                for ct in list_containers(api, n):
+                    cts.append(dict(ct, node=n))
+            except Exception as exc:  # noqa: BLE001 — surface, don't abort
+                console.print(f"[yellow]warning:[/yellow] node {n}: {exc}")
     except Exception as exc:
         console.print(f"[red]ERROR:[/red] {exc}")
         sys.exit(1)
@@ -334,6 +353,7 @@ def status():
     from rich.table import Table
     table = Table(title="Containers", show_header=True, header_style="bold cyan")
     table.add_column("VMID", justify="right")
+    table.add_column("Node", style="cyan")
     table.add_column("Name", style="green")
     table.add_column("Status")
     table.add_column("CPU", justify="right")
@@ -344,6 +364,7 @@ def status():
         mem_mb = round(int(ct.get("maxmem", 0)) / 1024 / 1024)
         table.add_row(
             str(ct.get("vmid", "")),
+            ct.get("node", ""),
             ct.get("name", ""),
             f"[{status_style}]{ct.get('status', 'unknown')}[/{status_style}]",
             str(ct.get("cpus", "")),
@@ -352,6 +373,60 @@ def status():
 
     console.print(table)
     console.print(f"\n[dim]{len(cts)} containers total[/dim]")
+
+
+@pve.command("ct")
+@click.argument("action", type=click.Choice(["start", "stop", "shutdown", "reboot"]))
+@click.argument("vmid", type=int)
+@click.option("--wait/--no-wait", default=True,
+              help="Block until the PVE task finishes (default: wait).")
+def ct(action: str, vmid: int, wait: bool):
+    """Start / stop / shutdown / reboot container VMID.
+
+    pve_api has carried these four calls for a long time with nothing
+    exposing them, so a container that tofu created but did not leave
+    running had no sanctioned way back up — `fleet deploy` would just
+    fail to reach it, and the only fix was the web UI or raw SSH to the
+    hypervisor.
+
+    The node is resolved from /cluster/resources, so VMID is enough.
+    """
+    from .pve_api import (get_client, resolve_node, start_container,
+                          stop_container, shutdown_container,
+                          reboot_container, wait_for_task)
+
+    verbs = {
+        "start": start_container,
+        "stop": stop_container,
+        "shutdown": shutdown_container,
+        "reboot": reboot_container,
+    }
+
+    try:
+        api = get_client()
+        node = resolve_node(api, vmid)
+        console.print(f"{action} CT {vmid} on [bold]{node}[/bold]…")
+        upid = verbs[action](api, vmid, node)
+    except Exception as exc:  # noqa: BLE001 — surface the API's own message
+        console.print(f"[red]ERROR:[/red] {exc}")
+        sys.exit(1)
+
+    if not wait:
+        console.print(f"[dim]{upid}[/dim]")
+        return
+
+    result = wait_for_task(api, upid, node)
+    # PVE reports a finished task as status=stopped; whether it WORKED is
+    # exitstatus, which is "OK" or an error string. Treating "stopped" as
+    # success would report every failed start as a success.
+    exit_status = result.get("exitstatus", "")
+    if result.get("status") == "timeout":
+        console.print(f"[yellow]still running after timeout:[/yellow] {upid}")
+        sys.exit(1)
+    if exit_status and exit_status != "OK":
+        console.print(f"[red]ERROR:[/red] {exit_status}")
+        sys.exit(1)
+    console.print(f"[green]{action} complete[/green]")
 
 
 @pve.command("storage")
