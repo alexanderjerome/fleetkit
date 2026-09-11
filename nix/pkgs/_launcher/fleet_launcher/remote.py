@@ -15,10 +15,30 @@ import click
 from rich.console import Console
 
 from ._util import find_project_root, fleet_cache_dir
-from .pve_api import get_host as get_pve_host
+from .pve_api import get_client, get_host as get_pve_host, node_address, resolve_node
 from .pve_ssh import ensure_master, run_on_host
 
 console = Console()
+
+
+def _pct_host(vmid: int) -> str:
+    """Address of the cluster member VMID actually runs on.
+
+    `pct exec` only sees /etc/pve/nodes/<self>/lxc/<vmid>.conf, so it has to
+    run on the guest's own node. PROXMOX_VE_ENDPOINT points at whichever
+    member serves the API — in a cluster that is usually a different one, and
+    using it fails with "Configuration file ... does not exist" against a
+    perfectly healthy cluster. Fall back to the endpoint when the cluster
+    lookup yields nothing: on a mono-host they are the same address anyway.
+    """
+    try:
+        api = get_client()
+        addr = node_address(api, resolve_node(api, vmid))
+        if addr:
+            return addr
+    except Exception as exc:
+        console.print(f"[yellow]WARN:[/yellow] cluster lookup failed ({exc}) — using the API endpoint")
+    return get_pve_host()
 
 
 def _load_hosts() -> dict:
@@ -72,7 +92,7 @@ def remote(host_name: str, command: tuple[str, ...], use_pct: bool, user: str) -
     cmd_str = " ".join(command)
 
     if use_pct:
-        pve_host = get_pve_host()
+        pve_host = _pct_host(int(vmid))
         if not pve_host:
             console.print("[red]ERROR:[/red] PROXMOX_VE_ENDPOINT not set — can't route via PVE host")
             return

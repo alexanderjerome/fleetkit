@@ -117,6 +117,22 @@ def resolve_node(api: ProxmoxAPI, vmid: int) -> str:
     return "pve"
 
 
+def node_address(api: ProxmoxAPI, node: str) -> str:
+    """SSH-reachable address of a cluster member, from /cluster/status.
+
+    PROXMOX_VE_ENDPOINT is the address of whichever member serves the API,
+    which in a cluster is usually NOT the member a given guest runs on.
+    Anything that has to execute on the guest's own node — `pct exec`, which
+    only sees /etc/pve/nodes/<self>/lxc/<vmid>.conf — needs this rather than
+    the endpoint, or it fails with "Configuration file ... does not exist"
+    while pointing at a perfectly healthy cluster.
+    """
+    for entry in api.cluster.status.get():
+        if entry.get("type") == "node" and entry.get("name") == node:
+            return entry.get("ip", "")
+    return ""
+
+
 def list_containers(api: ProxmoxAPI, node: str = "pve") -> list[dict]:
     """List all LXC containers on a node."""
     return api.nodes(node).lxc.get()
