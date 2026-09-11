@@ -55,6 +55,13 @@ in
       default = "services/builder/ssh_priv_key";
       description = "Sops key path of the private key the nix-daemon uses to reach the build machines. Read as root, since the daemon — not the invoking user — opens the connection.";
     };
+
+    sshKeySopsFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "../secrets/build-offload.yaml";
+      description = "Encrypted file holding <sshKeySopsPath>. Null reads it from the consumer's sops.defaultSopsFile. A split-store consumer — one file per resource, each encrypted to only the hosts that need it — sets no defaultSopsFile at all, so leaving this null there fails eval with `sops.defaultSopsFile was accessed but has no value defined`. That is the point of the split: the offload key is a fleet-wide credential and belongs in a file encrypted to the few hosts that opt in, not in one every host can read.";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -66,11 +73,13 @@ in
     ];
 
     # Root-owned: nix.buildMachines' sshKey is opened by the daemon.
-    sops.secrets.${cfg.sshKeySopsPath} = sopsLib.mkSecret {
+    sops.secrets.${cfg.sshKeySopsPath} = sopsLib.mkSecret ({
       owner = "root";
       group = "root";
       mode = "0400";
-    };
+    } // lib.optionalAttrs (cfg.sshKeySopsFile != null) {
+      sopsFile = cfg.sshKeySopsFile;
+    });
 
     # Empty `machines` (this host IS the only builder) leaves
     # distributedBuilds off rather than handing nix an empty machine list.
