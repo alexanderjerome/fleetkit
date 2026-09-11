@@ -15,7 +15,9 @@
 #   nix build .#topology-{combined,substrate}
 #
 # The inventory snapshot (inventory/snapshot/) is refreshed by
-# `nix run .#inventory-dump` + copy raw→snapshot (see .github/workflows/topology.yml).
+# `nix run .#inventory-dump` + copy raw→snapshot. It is an estate artifact and
+# is not committed here, so every command below is gated on its presence — see
+# `haveInventory`.
 
 { pkgs, lib, nix-topology, fleetCompute }:
 
@@ -27,7 +29,38 @@ let
   topoPkgs = pkgs.extend nix-topology.overlays.default;
   mkEval = mod: import nix-topology { pkgs = topoPkgs; modules = [ mod ]; };
 
-  combinedNodes = (import ./combined.nix { inherit lib; compute = fleetCompute; }).nodes;
+  # Where combined.nix and substrate.nix read the live dumps from. Bound once
+  # here and passed down so the existence gate below and the readFile calls it
+  # guards cannot drift apart.
+  inventoryDir = ../../../inventory/snapshot;
+
+  # The snapshot is a per-estate artifact refreshed out of band (`nix run
+  # .#inventory-dump`, then raw/ -> snapshot/): it is deliberately not committed
+  # to fleetkit, and a Proxmox-only estate has no xo.json to dump in the first
+  # place. Absent it, the two evals throw inside readFile — and because
+  # `nix flake check` EVALUATES every `packages.*` output while only BUILDING
+  # `checks.*`, that throw took the acceptance gate red for every consumer of
+  # this flake, including ones that never wanted a topology chart. So gate it.
+  # The package names stay stable either way; without a snapshot they are stubs
+  # that fail at build time saying what is missing.
+  haveInventory =
+    builtins.pathExists (inventoryDir + "/xo.json")
+    && builtins.pathExists (inventoryDir + "/pve.json");
+
+  noInventoryMsg =
+    "no inventory snapshot: expected xo.json and pve.json under inventory/snapshot/. "
+    + "Refresh it with 'nix run .#inventory-dump' (needs XOA_URL/XOA_TOKEN and "
+    + "PVE_ENDPOINT/PVE_TOKEN) and copy inventory/raw/ over inventory/snapshot/.";
+
+  needsInventory = name: pkgs.runCommand name { } ''
+    echo "${name}: ${noInventoryMsg}" >&2
+    exit 1
+  '';
+
+  combinedNodes = (import ./combined.nix {
+    inherit lib inventoryDir;
+    compute = fleetCompute;
+  }).nodes;
   profiles = import ./profiles.nix { inherit lib; };
 
   # Keep a selected node's ancestor chain (its PVE node + the XCP-ng host)
@@ -47,7 +80,7 @@ let
   profileEvals = mapAttrs (_: profileEval) profiles;
 
   combinedEval  = mkEval { imports = [ ./edge.nix ]; nodes = combinedNodes; };
-  substrateEval = mkEval (import ./substrate.nix { inherit lib; });
+  substrateEval = mkEval (import ./substrate.nix { inherit lib inventoryDir; });
 
   svgOutDir = "docs/topology/svg";
   copyProfile = name: p:
@@ -82,9 +115,31 @@ let
     '';
   };
 in
-{
-  inherit regen-topology-svg confluence-sync;
-  topology-combined  = combinedEval.config.output;
-  topology-substrate = substrateEval.config.output;
-}
-// mapAttrs' (n: e: nameValuePair "topology-${n}" e.config.output) profileEvals
+# Same attribute names on both branches — a consumer's `packages` set does not
+# change shape depending on whether it happens to have a snapshot on disk.
+if haveInventory then
+  {
+    inherit regen-topology-svg confluence-sync;
+    topology-combined = combinedEval.config.output;
+    topology-substrate = substrateEval.config.output;
+  }
+  // mapAttrs' (n: e: nameValuePair "topology-${n}" e.config.output) profileEvals
+else
+  {
+    inherit confluence-sync;
+    # Still a real script rather than a failing build, so `nix run` reports the
+    # missing snapshot instead of a Nix error about a path.
+    regen-topology-svg = pkgs.writeShellApplication {
+      name = "regen-topology-svg";
+      text = ''
+        echo "regen-topology-svg: ${noInventoryMsg}" >&2
+        exit 1
+      '';
+    };
+    topology-combined = needsInventory "topology-combined";
+    topology-substrate = needsInventory "topology-substrate";
+  }
+  # Keyed off `profiles`, not `profileEvals`, for the names only: profiles.nix
+  # reads no inventory, and profileEvals is derived from it, so the two branches
+  # cannot disagree about which topology-<profile> attributes exist.
+  // mapAttrs' (n: _: nameValuePair "topology-${n}" (needsInventory "topology-${n}")) profiles
