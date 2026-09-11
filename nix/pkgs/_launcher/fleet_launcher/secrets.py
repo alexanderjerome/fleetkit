@@ -414,6 +414,75 @@ def secrets_edit(secrets_file: str | None, plaintext: bool):
         console.print(f"[dim]Removed {pt_path}[/dim]")
 
 
+@secrets.command("host-recipient")
+@click.argument("host")
+def secrets_host_recipient(host: str):
+    """Print the age recipient for HOST, from its live SSH host key.
+
+    sops-nix decrypts on a node using that node's own ed25519 SSH host
+    key, so adding a host to a creation rule means putting the age
+    translation of its PUBLIC host key in .sops.yaml. That is a
+    keyscan piped through ssh-to-age — a step that, done by hand once
+    per new container, is exactly the kind of thing that gets written
+    into a comment and then mistyped.
+
+    HOST is an IP or hostname. Prints one `age1…` line, nothing else,
+    so it can be pasted straight under `keys:` as a new anchor.
+    """
+    for tool in ("ssh-keyscan", "ssh-to-age"):
+        if not shutil.which(tool):
+            console.print(f"[red]ERROR:[/red] {tool} not found — run inside nix develop")
+            sys.exit(1)
+
+    scan = subprocess.run(["ssh-keyscan", "-t", "ed25519", host],
+                          capture_output=True, text=True, timeout=30)
+    # ssh-keyscan reports "no route", "connection refused" and "no key of
+    # that type" alike on stderr and still exits 0, so the empty-stdout
+    # case has to be caught here or the operator gets an ssh-to-age parse
+    # error instead of the real reason.
+    lines = [l for l in scan.stdout.splitlines() if l and not l.startswith("#")]
+    if not lines:
+        console.print(f"[red]ERROR:[/red] no ed25519 host key from {host} — "
+                      f"is it up and running sshd?")
+        if scan.stderr.strip():
+            console.print(f"[dim]{scan.stderr.strip()}[/dim]")
+        sys.exit(1)
+
+    # "<host> ssh-ed25519 AAAA…" → the key itself.
+    pub = " ".join(lines[0].split()[1:])
+    conv = subprocess.run(["ssh-to-age"], input=pub + "\n",
+                          capture_output=True, text=True)
+    if conv.returncode != 0 or not conv.stdout.strip():
+        console.print(f"[red]ERROR:[/red] ssh-to-age failed: {conv.stderr.strip()}")
+        sys.exit(1)
+    click.echo(conv.stdout.strip())
+
+
+@secrets.command("updatekeys")
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--yes", "-y", is_flag=True, help="Don't prompt per file.")
+def secrets_updatekeys(files: tuple[str, ...], yes: bool):
+    """Re-encrypt FILES to the recipients .sops.yaml now names.
+
+    Editing a creation rule changes nothing on its own — an existing
+    file keeps the recipient list it was encrypted with, so a host
+    added to .sops.yaml still cannot decrypt until this runs. Wraps
+    `sops updatekeys` only to supply the fleet's age key the same way
+    every other verb in this group does; without it the operator is
+    exporting SOPS_AGE_KEY_FILE by hand at the exact moment they are
+    changing who can read a secret.
+    """
+    sops = _require_sops()
+    _ensure_age_key()
+    for path in files:
+        cmd = [sops, "updatekeys"] + (["-y"] if yes else []) + [path]
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            console.print(f"[red]ERROR:[/red] sops updatekeys failed for {path}")
+            sys.exit(result.returncode)
+        console.print(f"[green]updated[/green] {path}")
+
+
 @secrets.group("keys")
 def keys():
     """Manage individual secret keys."""
