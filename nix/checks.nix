@@ -10,6 +10,10 @@
 #                       template isn't taught about it, this fails.
 #   * example-tf-render — the terranix pipeline renders the example fleet's
 #                       stacks to valid Terraform JSON without eval errors.
+#   * mail-internal   — infra.mail.internal instantiates AND still refuses
+#                       to relay: the post-merge postfix settings and the
+#                       rendered dovecot.conf are asserted, not just
+#                       evaluated.
 #   * launcher        — the fleet CLI package builds and its module tree
 #                       imports (catches broken imports/renames that pure
 #                       eval never touches).
@@ -53,11 +57,48 @@ let
     };
   };
 
+  # A host running infra.mail.internal. Inline here rather than in the
+  # template for the same reason as tenantModule: a fresh consumer does
+  # not start with a mail server. It exists so the mail module is
+  # INSTANTIATED — `nix flake check` never touches a module that no host
+  # enables, which is how the Proton Bridge module shipped broken twice.
+  mailModule = {
+    config.fleet.compute.example-mail = {
+      env = "platform"; stack = "core";
+      provider_instance = "proxmox.main";
+      kind = "container";
+      vm_id = 102;
+      node = "pve1";
+      tags = [ "mail" ];
+      ip = ""; internal_ip = "192.0.2.102";
+      cpu_cores = 1; memory_mb = 512; swap_mb = 0;
+      root_disk_datastore = "local-lvm";
+      network_mode = "single-internal";
+      notes = "check-suite mail host";
+    };
+    config.fleet.hostsRegistry.example-mail = { ... }: {
+      infra.networking.singleInterface = true;
+      infra.mail.internal = {
+        enable = true;
+        domain = "mail.example.com";
+        hostname = "mx.example.com";
+        listenAddress = "192.0.2.102";
+        trustedNetworks = [ "127.0.0.0/8" "::1" "192.0.2.0/24" ];
+        mailboxes = {
+          "alerts@mail.example.com".passwordFile = "/run/secrets/mail-alerts";
+          "reports@mail.example.com".passwordFile = "/run/secrets/mail-reports";
+        };
+      };
+    };
+  };
+
   example = mkFleet {
-    modules = [ ../templates/minimal/fleet tenantModule ];
+    modules = [ ../templates/minimal/fleet tenantModule mailModule ];
     # No backend argument — deliberately: proves the ADR-097 fallback to
     # fleet.settings.backend (the template declares the bucket there).
   };
+
+  mailHost = example.nixosConfigurations.example-mail.config;
 
   # Negative test: the SAME resource name in two fleet namespaces must be
   # a hard eval error (names are estate-global). tryEval + deepSeq —
@@ -167,6 +208,77 @@ in {
       jq -e 'has("resource") or has("data") or has("provider")' "$r" > /dev/null \
         || { echo "render $r is not Terraform JSON"; exit 1; }
     done
+    touch $out
+  '';
+
+  # infra.mail.internal keeps its one promise: no route off the domain.
+  #
+  # Forcing example-mail's toplevel (below, as a strict env attr) proves
+  # the module stack closes. That is necessary and not sufficient — a
+  # green eval says nothing about what Postfix will actually read. So
+  # this reads the two RENDERED files, not the option values: main.cf
+  # (reached through the postfix-setup script that symlinks it, since
+  # the nixpkgs module keeps it let-bound) and dovecot.conf. Checking
+  # settings.main instead would pass while a later mkForce elsewhere
+  # rewrote the file.
+  mail-internal = pkgs.runCommand "fleetkit-mail-internal-check" {
+    mailToplevelDrv = builtins.unsafeDiscardOutputDependency
+      mailHost.system.build.toplevel.drvPath;
+    # ExecStart is "<script> " — the unit has no arguments, but the
+    # systemd module still joins on a space. removeSuffix keeps the
+    # string context (splitString would drop it, and the script would
+    # then not be an input to this derivation at all).
+    setupScript = pkgs.lib.removeSuffix " "
+      mailHost.systemd.services.postfix-setup.serviceConfig.ExecStart;
+    dovecotConf = mailHost.services.dovecot2.configFile;
+  } ''
+    echo "mail toplevel: $mailToplevelDrv"
+
+    mainCf=$(grep -o '/nix/store/[^ ]*-postfix-main\.cf' "$setupScript" | head -n1)
+    test -n "$mainCf" || { echo "could not find main.cf in $setupScript"; exit 1; }
+    echo "main.cf: $mainCf"
+
+    # An empty list renders as the key, then a whitespace-only
+    # continuation line — so these are exact-line matches on purpose.
+    grep -qx 'relayhost =' "$mainCf"
+    grep -qx 'relay_domains =' "$mainCf"
+    grep -qx 'mydestination =' "$mainCf"
+
+    # Accepted mail goes to Dovecot, for the one domain, and nowhere else.
+    grep -qx 'virtual_transport = lmtp:unix:private/dovecot-lmtp' "$mainCf"
+    grep -q 'virtual_mailbox_domains' "$mainCf"
+    grep -q 'mail.example.com' "$mainCf"
+
+    # The relay restrictions are a multi-line logical entry: pull just
+    # that entry out (the key line plus its indented continuations) so
+    # permit_mynetworks in smtpd_client_restrictions — where it belongs —
+    # does not mask its return here, where it must never appear.
+    relay=$(awk '
+      /^smtpd_relay_restrictions =/ { inentry = 1; print; next }
+      inentry && /^[[:space:]]/     { print; next }
+      inentry                       { exit }
+    ' "$mainCf")
+    echo "smtpd_relay_restrictions: $relay"
+    case "$relay" in
+      *reject_unauth_destination*) ;;
+      *) echo "smtpd_relay_restrictions lost reject_unauth_destination"; exit 1 ;;
+    esac
+    case "$relay" in
+      *permit_mynetworks*)
+        echo "smtpd_relay_restrictions grew permit_mynetworks — this host can relay off-domain"
+        exit 1 ;;
+    esac
+
+    # Dovecot authenticates against the runtime passwd file and not PAM,
+    # and hands Postfix an LMTP socket inside the queue directory.
+    grep -q 'driver = passwd-file' "$dovecotConf"
+    grep -q '/run/mail-internal/passwd' "$dovecotConf"
+    grep -q 'unix_listener /var/lib/postfix/queue/private/dovecot-lmtp' "$dovecotConf"
+    if grep -q 'driver = pam' "$dovecotConf"; then
+      echo "dovecot kept the PAM passdb — a shell account could log in as mail"
+      exit 1
+    fi
+
     touch $out
   '';
 

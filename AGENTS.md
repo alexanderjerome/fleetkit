@@ -20,11 +20,14 @@ input and describe their fleet as data.
    secret decryption, backend auth, inventory generation, and runtime env
    (ansible paths, plugin caches). If an operation you need is missing, add a
    CLI verb; do not bypass.
-2. **`nix flake check` is the acceptance gate** — six checks: `example-fleet`
+2. **`nix flake check` is the acceptance gate** — seven checks: `example-fleet`
    (parameter-surface completeness against the template), `example-tf-render`
-   (every example stack renders valid Terraform JSON), `launcher` (CLI builds
-   and runs), `docs` (options docs build with `warningsAreErrors`). All four
-   must pass before any change is done.
+   (every example stack renders valid Terraform JSON), `mail-internal`
+   (`infra.mail.internal` instantiates and its rendered main.cf still refuses
+   to relay), `launcher` (CLI builds and runs), `docs` (options docs build with
+   `warningsAreErrors`), `ansible-syntax` (framework playbooks parse), and
+   `compute-surface-golden` (emitters render byte-identically). All seven must
+   pass before any change is done.
 3. **Every option carries a description** — the `docs` check fails otherwise.
    Descriptions are static strings; never interpolate config values into them.
 4. **No site-specific literals in framework code.** Site values live behind

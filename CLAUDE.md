@@ -19,13 +19,14 @@ comes back through injection options.
 ## Validation loop
 
 ```bash
-nix flake check        # THE acceptance gate — all six checks must pass:
+nix flake check        # THE acceptance gate — all seven checks must pass:
                        #   example-fleet     parameter surface complete
                        #   example-tf-render stacks render valid TF JSON
                        #   launcher          CLI builds + runs
                        #   docs              every option documented
                        #   compute-surface-golden  emitters render byte-identically
                        #   ansible-syntax    framework playbooks parse
+                       #   mail-internal     rendered main.cf still won't relay
 nix build .#docs       # options site (chapters under fleet/, infra/)
 nix build .#options-json
 ```

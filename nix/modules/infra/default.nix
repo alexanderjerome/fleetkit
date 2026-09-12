@@ -61,6 +61,7 @@
 
     # ── infra.mail — mail transport ──
     ./mail/protonmail-bridge # headless Proton Mail Bridge (infra.mail.protonmailBridge)
+    ./mail/internal # internal-only Postfix + Dovecot (infra.mail.internal)
 
     # ── infra.auth — directory / identity ──
     ./auth/sssd # LDAP directory auth; probe sub-feature at infra.auth.sssd.probe
