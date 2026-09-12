@@ -65,9 +65,14 @@ in
     # Rotation now: regenerate the key pair locally, replace the SOPS
     # entry, replace nix/secrets/secrets/keys/builder-cache-pub-key.pem,
     # deploy the build host, then fleet-redeploy.
+    # Deliberately root-owned. Since nixpkgs 26.11 harmonia runs as a
+    # `DynamicUser`, so there is no static `harmonia` user at activation
+    # time — naming one as `owner` makes sops-install-secrets fail
+    # *manifest validation*, which takes down every secret on the host,
+    # not just this one. The unit reaches the key through systemd
+    # `LoadCredential`, which reads it as root before dropping
+    # privileges, so root ownership is both correct and required.
     sops.secrets."services/builder/cache_signing_priv_key" = sopsLib.mkSecret {
-      owner = "harmonia";
-      group = "harmonia";
       mode = "0400";
       restartUnits = [ "harmonia.service" ];
     };
