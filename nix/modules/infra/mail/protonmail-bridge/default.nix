@@ -59,24 +59,28 @@ let
   # store is created correctly either way, and that is exactly what hides
   # the fault.
   #
-  # PATH lives in bridgeEnv rather than in the unit's `path` so that the
-  # service, the keyring init and the interactive login cannot disagree
-  # about it again — that divergence is the whole bug.
-  bridgePath = lib.makeBinPath [ pkgs.gnupg pkgs.pass pkgs.coreutils ];
+  # One list, consumed two different ways, because the unit and a shell
+  # cannot take PATH by the same route: NixOS *derives*
+  # systemd.services.<n>.environment.PATH from `path`, so setting both is a
+  # conflicting definition rather than an override. The unit gets `path`;
+  # the shells get bridgePath.
+  keyringTools = [ pkgs.gnupg pkgs.pass ];
+  bridgePath = lib.makeBinPath (keyringTools ++ [ pkgs.coreutils ]);
 
   bridgeEnv = {
     HOME = stateDir;
     GNUPGHOME = "${stateDir}/.gnupg";
     PASSWORD_STORE_DIR = "${stateDir}/.password-store";
-    PATH = bridgePath;
   };
 
   # `runuser -u <user> -- env A=b …` — the bridge and its keyring tools
   # must all agree on HOME, or `pass` and the bridge look at different
-  # stores and the login silently fails to persist.
+  # stores and the login silently fails to persist. PATH is passed here and
+  # not in bridgeEnv so the unit's own PATH stays systemd's to define.
   asBridgeUser = lib.concatStringsSep " " (
     [ "${pkgs.util-linux}/bin/runuser" "-u" user "--" "${pkgs.coreutils}/bin/env" ]
     ++ lib.mapAttrsToList (k: v: "${k}=${v}") bridgeEnv
+    ++ [ "PATH=${bridgePath}" ]
   );
 
   # Idempotent: generates the GPG key and initialises the pass store only
@@ -298,9 +302,8 @@ in
         # no account, and a running bridge would only fail quietly.
         unitConfig.ConditionPathExists = loginMarker;
 
-        # bridgeEnv carries PATH; a `path = [...]` here would be a second
-        # definition of it, and systemd lets environment.PATH win silently.
         environment = bridgeEnv;
+        path = keyringTools;
 
         serviceConfig = {
           Type = "simple";
