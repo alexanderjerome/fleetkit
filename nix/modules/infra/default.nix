@@ -59,6 +59,9 @@
     ./build/registry-proxy.nix # infra.build.registryProxy
     ./build/apt-cache # apt-cacher-ng (infra.build.aptCache)
 
+    # ── infra.mail — mail transport ──
+    ./mail/protonmail-bridge # headless Proton Mail Bridge (infra.mail.protonmailBridge)
+
     # ── infra.auth — directory / identity ──
     ./auth/sssd # LDAP directory auth; probe sub-feature at infra.auth.sssd.probe
 
