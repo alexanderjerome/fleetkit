@@ -22,14 +22,15 @@
 # not secret, and being able to diff them is the point. Only the password
 # hashes come from files, which is what lets them live in SOPS.
 #
-# Four things worth knowing before changing this:
+# Five things worth knowing before changing this:
 #
-#   1. Without a certificate, Dovecot serves IMAP in the clear. The
-#      nixpkgs module emits `ssl = no` AND `disable_plaintext_auth = no`
-#      whenever sslServerCert is null — otherwise the port would accept
-#      connections and fail every login with a message that never
-#      mentions TLS. This module does not restate that; it just inherits
-#      it. Set `tls` on any network you do not fully control.
+#   1. Without a certificate, Dovecot serves IMAP in the clear, and this
+#      module says so outright: `ssl = no` plus the version's spelling of
+#      "allow cleartext auth". Neither is inherited — nixpkgs used to emit
+#      both whenever sslServerCert was null, and no longer does. Leaving
+#      them out gets you a port that accepts connections and fails every
+#      login with a message that never mentions TLS. Set `tls` on any
+#      network you do not fully control.
 #   2. The password file is assembled at runtime under /run, not built
 #      into the store. Hashes are secrets; the store is world-readable.
 #   3. Dovecot's LMTP and SASL sockets live under Postfix's queue
@@ -38,12 +39,38 @@
 #      fresh host and dies on a missing directory.
 #   4. The NixOS unit is `dovecot.service`, not `dovecot2.service`, even
 #      though the options live at `services.dovecot2`.
+#   5. Two Dovecot config dialects are emitted, and which one a host gets
+#      is not this module's choice — see `dovecotPre24` below.
 { config, lib, pkgs, ... }:
 let
   inherit (lib) mkEnableOption mkOption mkIf types;
   cfg = config.infra.mail.internal;
 
   vmailUser = "vmail";
+
+  # Which Dovecot this host will actually run. nixpkgs picks the package
+  # from `system.stateVersion` — dovecot_2_3 below 26.05, 2.4 at or above
+  # — so the consumer's stateVersion, not fleetkit, decides which config
+  # dialect is legal. Both have to work: every fleetkit consumer today
+  # resolves to 2.3, and the first one to raise stateVersion gets 2.4
+  # without touching this file.
+  #
+  # The settings themselves are not compatible in either direction. 2.4
+  # dropped `mail_location`, `disable_plaintext_auth` and the `args =`
+  # form of passdb/userdb; 2.3 rejects `mail_path`, `mail_driver`,
+  # `auth_allow_cleartext` and the two mandatory version keys as unknown
+  # settings — a fatal parse error, not a warning. The mail-internal
+  # check runs each version's own `doveconf` over the rendered file for
+  # exactly this reason.
+  dovecotPre24 = lib.versionOlder config.services.dovecot2.package.version "2.4";
+
+  # Where one mailbox's Maildir lives. 2.4 retired the short expansion
+  # variables in favour of a template language, so the same path has two
+  # spellings.
+  maildirPath =
+    if dovecotPre24
+    then "${cfg.stateDir}/%d/%n"
+    else "${cfg.stateDir}/%{user | domain}/%{user | username}";
 
   # Assembled by the oneshot below from the per-mailbox hash files. Under
   # /run because it is reconstructed every boot and must never be in the
@@ -70,6 +97,97 @@ let
   # resolves a relative unix socket path against queue_directory.
   queueDir = "/var/lib/postfix/queue";
 
+  # A Dovecot `service` block whose only job is to put a socket where
+  # Postfix can reach it. Both sockets live in Postfix's queue directory
+  # and are owned by Postfix, because Postfix is the only thing that ever
+  # connects to them.
+  postfixSocketService = serviceName: socket: mode: {
+    _section.name = serviceName;
+    "unix_listener ${queueDir}/private/${socket}" = {
+      inherit mode;
+      user = config.services.postfix.user;
+      group = config.services.postfix.group;
+    };
+  };
+
+  # Settings that are spelled the same in 2.3 and 2.4. `service` is a
+  # list of sections in both: the renderer takes the section name from
+  # `_section.name`, so one definition covers each.
+  dovecotCommonSettings = {
+    mail_uid = vmailUser;
+    mail_gid = vmailUser;
+
+    service =
+      [ (postfixSocketService "lmtp" "dovecot-lmtp" "0600") ]
+      ++ lib.optional cfg.submission.enable
+        (postfixSocketService "auth" "auth" "0660")
+      ++ lib.optional cfg.imap.enable {
+        _section.name = "imap-login";
+        "inet_listener imap".port = cfg.imap.port;
+      };
+  } // lib.optionalAttrs (cfg.listenAddress != null) {
+    listen = cfg.listenAddress;
+  };
+
+  # Dovecot 2.3. `args` is a single opaque string the driver parses
+  # itself, which is why the static userdb's fields are jammed together
+  # here and broken out in 2.4.
+  dovecot23Settings = {
+    protocols = [ "lmtp" ] ++ lib.optional cfg.imap.enable "imap";
+    mail_location = "maildir:${maildirPath}";
+
+    "passdb passwd-file" = {
+      driver = "passwd-file";
+      args = "scheme=CRYPT username_format=%u ${passwdFile}";
+    };
+
+    # Static userdb: one uid owns every Maildir, so there is no
+    # per-mailbox system account to manage or to leak a shell.
+    "userdb static" = {
+      driver = "static";
+      args = "uid=${vmailUser} gid=${vmailUser} home=${maildirPath}";
+    };
+  } // (if cfg.tls == null then {
+    ssl = "no";
+    disable_plaintext_auth = false;
+  } else {
+    ssl = "yes";
+    # The leading `<` is 2.3's "read this setting from that file"; drop
+    # it and Dovecot treats the path as a PEM blob.
+    ssl_cert = "<${cfg.tls.certFile}";
+    ssl_key = "<${cfg.tls.keyFile}";
+  });
+
+  # Dovecot 2.4. The two version keys are mandatory — the nixpkgs module
+  # asserts on their absence — and they pin the dialect Dovecot parses,
+  # so they track the package rather than being hardcoded.
+  dovecot24Settings = {
+    dovecot_config_version = config.services.dovecot2.package.version;
+    dovecot_storage_version = config.services.dovecot2.package.version;
+
+    protocols = { lmtp = true; imap = cfg.imap.enable; };
+    mail_driver = "maildir";
+    mail_path = maildirPath;
+
+    "passdb passwd-file" = {
+      passwd_file_path = passwdFile;
+      default_password_scheme = "CRYPT";
+    };
+
+    "userdb static".fields = {
+      uid = vmailUser;
+      gid = vmailUser;
+      home = maildirPath;
+    };
+  } // (if cfg.tls == null then {
+    ssl = "no";
+    auth_allow_cleartext = true;
+  } else {
+    ssl = "yes";
+    ssl_server_cert_file = cfg.tls.certFile;
+    ssl_server_key_file = cfg.tls.keyFile;
+  });
+
   passwdInit = pkgs.writeShellScript "mail-internal-passwd" ''
     set -euo pipefail
     umask 0077
@@ -92,7 +210,7 @@ let
     # Dovecot's auth process runs as root (the nixpkgs module pins it
     # that way), so root:root 0400 would do. The group read is for
     # `doveadm` run by an operator in the dovecot group.
-    chown root:${config.services.dovecot2.group} "$tmp"
+    chown root:${config.services.dovecot2.settings.default_internal_group} "$tmp"
     chmod 0440 "$tmp"
     mv -f "$tmp" ${passwdFile}
   '';
@@ -260,9 +378,9 @@ in
     ];
 
     # The vmail user and group come from Dovecot's own createMailUser
-    # (default true) once mailUser/mailGroup are set below; declaring
-    # them again here would collide on `description`. Only the home is
-    # ours to add.
+    # (default true) once settings.mail_uid/mail_gid are set below;
+    # declaring them again here would collide on `description`. Only the
+    # home is ours to add.
     users.users.${vmailUser}.home = cfg.stateDir;
 
     systemd.tmpfiles.rules = [
@@ -332,60 +450,16 @@ in
 
     services.dovecot2 = {
       enable = true;
-      enableImap = cfg.imap.enable;
-      enableLmtp = true;
-      mailUser = vmailUser;
-      mailGroup = vmailUser;
-      mailLocation = "maildir:${cfg.stateDir}/%d/%n";
-
-      sslServerCert = mkIf (cfg.tls != null) cfg.tls.certFile;
-      sslServerKey = mkIf (cfg.tls != null) cfg.tls.keyFile;
 
       # No PAM: these accounts are not system users, and leaving the PAM
       # passdb in place would let a local shell account log in as mail.
+      # This is already the option's default; it is restated because the
+      # mail-internal check asserts on it, and a default that quietly
+      # flips is exactly the regression that check exists to catch.
       enablePAM = false;
 
-      extraConfig = ''
-        ${lib.optionalString (cfg.listenAddress != null) "listen = ${cfg.listenAddress}"}
-
-        passdb {
-          driver = passwd-file
-          args = scheme=CRYPT username_format=%u ${passwdFile}
-        }
-
-        # Static userdb: one uid owns every Maildir, so there is no
-        # per-mailbox system account to manage or to leak a shell.
-        userdb {
-          driver = static
-          args = uid=${vmailUser} gid=${vmailUser} home=${cfg.stateDir}/%d/%n
-        }
-
-        service lmtp {
-          unix_listener ${queueDir}/private/dovecot-lmtp {
-            mode = 0600
-            user = ${config.services.postfix.user}
-            group = ${config.services.postfix.group}
-          }
-        }
-
-        ${lib.optionalString cfg.submission.enable ''
-          service auth {
-            unix_listener ${queueDir}/private/auth {
-              mode = 0660
-              user = ${config.services.postfix.user}
-              group = ${config.services.postfix.group}
-            }
-          }
-        ''}
-
-        ${lib.optionalString cfg.imap.enable ''
-          service imap-login {
-            inet_listener imap {
-              port = ${toString cfg.imap.port}
-            }
-          }
-        ''}
-      '';
+      settings = dovecotCommonSettings
+        // (if dovecotPre24 then dovecot23Settings else dovecot24Settings);
     };
 
     # Dovecot opens its LMTP (and SASL) socket inside Postfix's queue
