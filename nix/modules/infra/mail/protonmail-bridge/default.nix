@@ -15,6 +15,9 @@
 #      generated with an empty one by a oneshot unit. The secret this
 #      protects is the bridge's own local copy of the Proton session; the
 #      real boundary is filesystem permissions on the state directory.
+#      Building the store is not enough — `pass` must also be on PATH by
+#      name wherever the bridge runs, including the interactive login. See
+#      bridgePath below.
 #   2. **The first login is interactive and is not automated.** Run
 #      `protonmail-bridge-login` on the host once; it stops the sockets,
 #      drops into the bridge CLI for `login`, and writes the marker that
@@ -43,10 +46,29 @@ let
   # SMTP port look alive to Infisical while every message bounced.
   loginMarker = "${stateDir}/.logged-in";
 
+  # `pass` and `gpg` have to be reachable BY NAME, not by store path. The
+  # bridge picks its credential helper with exec.LookPath("pass"); it never
+  # reads PASSWORD_STORE_DIR to decide, only after it has found the binary.
+  # With `pass` absent it falls back to the D-Bus secret service, which a
+  # headless container does not have, and reports:
+  #
+  #   Proton Mail Bridge is not able to detect a supported password manager
+  #
+  # — which reads like the store was never built. It was; nothing looked at
+  # it. keyringInit below calls gpg and pass by absolute store path, so the
+  # store is created correctly either way, and that is exactly what hides
+  # the fault.
+  #
+  # PATH lives in bridgeEnv rather than in the unit's `path` so that the
+  # service, the keyring init and the interactive login cannot disagree
+  # about it again — that divergence is the whole bug.
+  bridgePath = lib.makeBinPath [ pkgs.gnupg pkgs.pass pkgs.coreutils ];
+
   bridgeEnv = {
     HOME = stateDir;
     GNUPGHOME = "${stateDir}/.gnupg";
     PASSWORD_STORE_DIR = "${stateDir}/.password-store";
+    PATH = bridgePath;
   };
 
   # `runuser -u <user> -- env A=b …` — the bridge and its keyring tools
@@ -246,7 +268,12 @@ in
       "d ${stateDir} 0700 ${user} ${user} -"
     ];
 
-    environment.systemPackages = [ cfg.package loginScript ];
+    # gnupg and pass are here for the operator, not for the bridge — the
+    # bridge gets them from bridgeEnv.PATH. Inspecting the store by hand
+    # (`pass ls`, `gpg --list-secret-keys`) is the first thing anyone does
+    # when a login will not stick, and on a single-purpose host the cost of
+    # having them is nil.
+    environment.systemPackages = [ cfg.package loginScript pkgs.gnupg pkgs.pass ];
 
     systemd.services = {
       protonmail-bridge-keyring = {
@@ -271,8 +298,9 @@ in
         # no account, and a running bridge would only fail quietly.
         unitConfig.ConditionPathExists = loginMarker;
 
+        # bridgeEnv carries PATH; a `path = [...]` here would be a second
+        # definition of it, and systemd lets environment.PATH win silently.
         environment = bridgeEnv;
-        path = [ pkgs.gnupg pkgs.pass ];
 
         serviceConfig = {
           Type = "simple";
